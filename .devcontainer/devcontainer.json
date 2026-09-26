@@ -7,7 +7,7 @@
     }
   },
   "containerEnv": {
-    "SLICER_ALLOWED_REPOSITORIES": "antonio1000homens/led",
+    "SLICER_ALLOWED_REPOSITORIES": "antonio1000homens/led,antonio1000homens/windsor-slicer-fixture",
     "BAMBU_STUDIO_VERSION": "v02.08.02.61",
     "SLICER_MACHINE_PROFILE": "Bambu Lab H2D 0.4 nozzle",
     "SLICER_PROCESS_PROFILE": "0.20mm Standard @BBL H2D",
