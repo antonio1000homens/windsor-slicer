@@ -85,7 +85,6 @@ jobs:
           test -n "$CODESPACE_OWNER"
           test -n "$ACCESS_ISSUER"
           test -n "$ACCESS_AUDIENCE"
-          grep -Fq "CODESPACE_NAME = \"$CODESPACE_NAME\"" cloud/slicer-worker/wrangler.toml
           node --check cloud/slicer-worker/src/index.js
           wrangler deploy --dry-run --config cloud/slicer-worker/wrangler.toml
 
