@@ -1,6 +1,11 @@
 {
   "name": "Windsor Slicer",
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/sshd:1": {
+      "version": "latest"
+    }
+  },
   "containerEnv": {
     "SLICER_ALLOWED_REPOSITORIES": "antonio1000homens/led",
     "BAMBU_STUDIO_VERSION": "v02.08.02.61",

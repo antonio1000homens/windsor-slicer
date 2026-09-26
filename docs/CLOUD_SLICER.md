@@ -11,6 +11,8 @@ Set these Codespaces secrets/environment values before starting the service:
 
 The devcontainer installs Bambu Studio `v02.08.02.61`, OpenSCAD, and the Python MCP dependencies on creation. `.tools` and the Python environment persist over ordinary stop/start. `postStartCommand` starts Streamable HTTP on port 8000 only when the origin bearer exists. `/health` requires the same bearer.
 
+The devcontainer also enables the Codespaces-managed SSH service so `gh codespace ssh` can run direct diagnostics and acceptance smokes in the configured Codespace.
+
 ## Worker configuration
 
 The Worker requires `ACCESS_ISSUER`, `ACCESS_AUDIENCE`, optional `ACCESS_ADDITIONAL_AUDIENCES`, `CODESPACE_OWNER`, `CODESPACE_NAME`, `CODESPACE_PORT`, `GITHUB_CODESPACES_TOKEN`, and `ORIGIN_BEARER_TOKEN`. It validates the signed Access JWT before contacting GitHub, starts a stopped Codespace, opens only the configured port, probes the origin, and then proxies the request with the private origin bearer. No static public MCP client bearer is supported.
