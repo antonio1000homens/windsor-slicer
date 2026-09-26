@@ -25,6 +25,8 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("/windsor-slicer/cloud-slicer/", deploy)
         self.assertNotIn("/led/cloud-slicer/", deploy)
         self.assertNotIn("MCP_CLIENT_TOKEN", deploy)
+        self.assertIn('--var "CODESPACE_NAME:$CODESPACE_NAME"', deploy)
+        self.assertIn('CODESPACE_NAME: ${{ vars.CODESPACE_NAME }}', workflow)
 
     def test_oidc_policy_is_repository_and_parameter_scoped(self):
         template = (ROOT / "infrastructure/cloud-slicer-deploy-role.yaml").read_text()
