@@ -1,0 +1,65 @@
+name: Slicer MCP / Validate
+
+on:
+  pull_request:
+    paths:
+      - 'mcp_servers/**'
+      - 'scripts/run-slicer-mcp.sh'
+      - 'scripts/slicer/**'
+      - 'tests/test_slicer_mcp.py'
+      - 'cloud/slicer-worker/**'
+      - 'tests/test_slicer_worker.js'
+      - '.devcontainer/**'
+      - 'docs/SLICER_MCP.md'
+      - '.github/workflows/slicer-mcp.yml'
+  push:
+    branches:
+      - master
+    paths:
+      - 'mcp_servers/**'
+      - 'scripts/run-slicer-mcp.sh'
+      - 'scripts/slicer/**'
+      - 'tests/test_slicer_mcp.py'
+      - 'cloud/slicer-worker/**'
+      - 'tests/test_slicer_worker.js'
+      - '.devcontainer/**'
+      - 'docs/SLICER_MCP.md'
+      - '.github/workflows/slicer-mcp.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install MCP test dependencies
+        run: python -m pip install --disable-pip-version-check -r mcp_servers/slicer/requirements.txt
+
+      - name: Compile MCP sources
+        run: |
+          python -m compileall -q mcp_servers/slicer
+          python -m py_compile scripts/slicer/codespace-mcp-smoke.py
+
+      - name: Validate Cloudflare Worker syntax
+        run: node --check cloud/slicer-worker/src/index.js
+
+      - name: Run Cloudflare Worker tests
+        run: node --test tests/test_slicer_worker.js
+
+      - name: Validate Codespace startup scripts
+        run: |
+          bash -n .devcontainer/post-start.sh
+          bash -n scripts/slicer/run-codespace-mcp-smoke.sh
+
+      - name: Run MCP contract tests
+        run: python -m unittest discover -s tests -p 'test_slicer_mcp.py' -v

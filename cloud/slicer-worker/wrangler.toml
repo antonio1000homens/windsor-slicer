@@ -1,0 +1,21 @@
+name = "windsor-slicer"
+main = "src/index.js"
+compatibility_date = "2026-09-26"
+workers_dev = false
+routes = [{ pattern = "slicer.alf-broadcast.co.uk", custom_domain = true }]
+
+[vars]
+CODESPACE_PORT = "8000"
+CODESPACE_FORWARDING_DOMAIN = "app.github.dev"
+STARTUP_POLLS = "12"
+STARTUP_POLL_MS = "3000"
+PORT_POLLS = "10"
+PORT_POLL_MS = "2000"
+HEALTH_POLLS = "10"
+HEALTH_POLL_MS = "2000"
+
+# Route the Worker to slicer.alf-broadcast.co.uk/*.
+# Required Worker secrets:
+# GITHUB_CODESPACES_TOKEN - narrowly scoped token for the configured Codespace owner
+# ORIGIN_BEARER_TOKEN     - matches Codespaces SLICER_MCP_BEARER_TOKEN
+# ACCESS_ISSUER/AUDIENCE  - Cloudflare Access verifier configuration

@@ -1,0 +1,95 @@
+name: Cloud Slicer / Deploy Worker
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/slicer-worker.yml'
+      - 'cloud/slicer-worker/**'
+      - 'infrastructure/cloud-slicer-deploy-role.yaml'
+      - 'tests/test_deployment_static.py'
+      - 'scripts/slicer/deploy-cloud-slicer-worker.sh'
+      - 'tests/test_deployment_static.py'
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/slicer-worker.yml'
+      - 'cloud/slicer-worker/**'
+      - 'infrastructure/cloud-slicer-deploy-role.yaml'
+      - 'tests/test_deployment_static.py'
+      - 'scripts/slicer/deploy-cloud-slicer-worker.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - run: python -m unittest tests.test_deployment_static -v
+      - run: bash -n scripts/slicer/deploy-cloud-slicer-worker.sh
+      - run: node --check cloud/slicer-worker/src/index.js
+      - run: node --test tests/test_slicer_worker.js
+      - run: npm install --global wrangler@4.71.0
+      - run: wrangler deploy --dry-run --config cloud/slicer-worker/wrangler.toml
+
+  deploy:
+    needs: validate
+    # Keep the production hostname on the proven LED origin until the direct
+    # windsor-slicer Codespace acceptance gate has been completed.
+    if: github.event_name == 'workflow_dispatch' && vars.SLICER_CUTOVER_APPROVED == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: led-cloud-slicer-worker
+      cancel-in-progress: false
+    env:
+      AWS_REGION: eu-west-2
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      CODESPACE_OWNER: ${{ vars.CODESPACE_OWNER }}
+      ACCESS_ISSUER: ${{ vars.ACCESS_ISSUER }}
+      ACCESS_AUDIENCE: ${{ vars.ACCESS_AUDIENCE }}
+      ACCESS_ADDITIONAL_AUDIENCES: ${{ vars.ACCESS_ADDITIONAL_AUDIENCES }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: arn:aws:iam::243857182133:role/windsor-slicer-github-cloud-slicer-deploy-role
+          role-session-name: github-actions-windsor-slicer
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+
+      - name: Install pinned Wrangler
+        run: npm install --global wrangler@4.71.0
+
+      - name: Validate deployment inputs
+        env:
+          CODESPACE_NAME: ${{ vars.CODESPACE_NAME }}
+          CODESPACE_OWNER: ${{ vars.CODESPACE_OWNER }}
+        run: |
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CODESPACE_NAME"
+          test -n "$CODESPACE_OWNER"
+          test -n "$ACCESS_ISSUER"
+          test -n "$ACCESS_AUDIENCE"
+          grep -Fq "CODESPACE_NAME = \"$CODESPACE_NAME\"" cloud/slicer-worker/wrangler.toml
+          node --check cloud/slicer-worker/src/index.js
+          wrangler deploy --dry-run --config cloud/slicer-worker/wrangler.toml
+
+      - name: Deploy Worker and sync SSM secrets
+        env:
+          CODESPACE_NAME: ${{ vars.CODESPACE_NAME }}
+        run: bash scripts/slicer/deploy-cloud-slicer-worker.sh

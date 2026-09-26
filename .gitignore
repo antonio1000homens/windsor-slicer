@@ -1,0 +1,7 @@
+.venv/
+.tools/
+.wrangler/
+runtime/
+artifacts/
+__pycache__/
+*.py[cod]
