@@ -1,0 +1,65 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: GitHub OIDC role for deploying the Windsor Slicer Cloudflare Worker.
+
+Parameters:
+  GitHubOidcProviderArn:
+    Type: String
+    Description: Existing IAM OIDC provider ARN for token.actions.githubusercontent.com.
+  RepoOwner:
+    Type: String
+    Default: antonio1000homens
+  RepoOwnerId:
+    Type: String
+    Default: '36929120'
+  RepoName:
+    Type: String
+    Default: windsor-slicer
+  RepoId:
+    Type: String
+    Default: '1389803549'
+  DeployBranch:
+    Type: String
+    Default: master
+
+Resources:
+  GitHubActionsCloudSlicerDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: windsor-slicer-github-cloud-slicer-deploy-role
+      Description: Reads only Windsor Slicer Worker credentials from its SSM prefix.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${RepoOwner}@${RepoOwnerId}/${RepoName}@${RepoId}:ref:refs/heads/${DeployBranch}
+      Policies:
+        - PolicyName: windsor-slicer-cloudflare-worker-deploy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ReadWorkerSecrets
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/windsor-slicer/cloud-slicer/github-codespaces-token
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/windsor-slicer/cloud-slicer/origin-bearer-token
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/windsor-slicer/cloud-slicer/cloudflare-api-token
+              - Sid: DecryptWorkerSecrets
+                Effect: Allow
+                Action: kms:Decrypt
+                Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+                  StringLike:
+                    kms:EncryptionContext:PARAMETER_ARN: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/windsor-slicer/cloud-slicer/*
+
+Outputs:
+  CloudSlicerDeployRoleArn:
+    Value: !GetAtt GitHubActionsCloudSlicerDeployRole.Arn
