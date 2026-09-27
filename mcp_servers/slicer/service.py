@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from mcp_servers.slicer.activity import command_error, command_request, command_response
 from mcp_servers.slicer.workspace import WorkspaceError, WorkspaceManager
 
 
@@ -234,7 +235,13 @@ def _run_process_group(
     if os.name == "posix":
         popen_kwargs["start_new_session"] = True
 
-    process = subprocess.Popen(command, **popen_kwargs)
+    started = command_request(command, cwd=cwd)
+    try:
+        process = subprocess.Popen(command, **popen_kwargs)
+    except Exception as error:
+        command_error(command, error, started)
+        raise
+
     try:
         stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as error:
@@ -257,14 +264,23 @@ def _run_process_group(
 
         error.stdout = stdout
         error.stderr = stderr
+        command_error(command, error, started)
         raise
 
-    return subprocess.CompletedProcess(
+    completed = subprocess.CompletedProcess(
         command,
         process.returncode,
         stdout,
         stderr,
     )
+    command_response(
+        command,
+        returncode=completed.returncode,
+        stdout=completed.stdout,
+        stderr=completed.stderr,
+        started=started,
+    )
+    return completed
 
 
 @dataclass
