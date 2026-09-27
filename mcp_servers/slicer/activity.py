@@ -27,7 +27,7 @@ _SECRET_KEY_RE = re.compile(
 )
 _BEARER_RE = re.compile(r"(bearer\s+)[^\s\"']+", re.IGNORECASE)
 _DEFAULT_MAX_BYTES = 5 * 1024 * 1024
-_DEFAULT_BACKUPS = 3
+_DEFAULT_BACKUPS = 2
 _DEFAULT_FIELD_CHARS = 4000
 
 _logger = logging.getLogger("windsor_slicer.activity")
