@@ -34,7 +34,7 @@ The Codespace devcontainer installs OpenSCAD and the pinned Bambu Studio runtime
 
 `slicer_slice`, `slicer_validate_for_print`, and `slicer_prepare_print` accept optional per-job `machine_profile`, `process_profile`, and `filament_profile` overrides. Each setting resolves in this order: explicit request, corresponding `SLICER_*_PROFILE` runtime environment value, then the built-in fallback. The current Codespace defaults are `Bambu Lab H2D 0.4 nozzle`, `0.20mm Standard @BBL H2D`, and `Bambu PLA Basic @BBL H2D` for machine, process, and filament respectively. `slicer_capabilities` reports the effective runtime defaults and the built-in fallbacks.
 
-To select PETG, call `slicer_list_profiles(profile_type="filament")`, choose the exact installed PETG profile name from the response, then pass that name as `filament_profile` to the desired prepare, validation, or slice call. Profile names are discovered from the installed Bambu Studio profile tree; PETG is not hard-coded. This changes material for that job and does not require editing `devcontainer.json` or rebuilding the Codespace.
+To select PETG, call `slicer_list_profiles(profile_type="filament", query="PETG")` (or list all filament profiles without a query), choose the exact installed PETG profile name from the response, then pass that name as `filament_profile` to the desired prepare, validation, or slice call. Type-specific profile listings are not truncated, while an unfiltered all-types listing remains bounded. Profile names are discovered from the installed Bambu Studio profile tree; PETG is not hard-coded. This changes material for that job and does not require editing `devcontainer.json` or rebuilding the Codespace.
 
 ## MCP authentication
 

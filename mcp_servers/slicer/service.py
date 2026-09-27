@@ -370,7 +370,11 @@ class BambuStudioProvider:
         )
         return result
 
-    def list_profiles(self, profile_type: str | None = None) -> dict[str, Any]:
+    def list_profiles(
+        self,
+        profile_type: str | None = None,
+        query: str | None = None,
+    ) -> dict[str, Any]:
         root = _find_profile_root()
         if root is None:
             return {
@@ -385,6 +389,10 @@ class BambuStudioProvider:
             raise SlicerServiceError(
                 "profile_type must be machine, process, filament, or omitted"
             )
+        search = (query or "").strip()
+        if len(search) > 128:
+            raise SlicerServiceError("profile query must be at most 128 characters")
+        folded_search = search.casefold()
 
         profiles: list[dict[str, str]] = []
         for file_path in root.rglob("*.json"):
@@ -405,6 +413,8 @@ class BambuStudioProvider:
             lower_name = name.casefold()
             if "h2d" not in lower_name and kind != "filament":
                 continue
+            if folded_search and folded_search not in lower_name:
+                continue
             profiles.append(
                 {
                     "name": name,
@@ -414,11 +424,17 @@ class BambuStudioProvider:
             )
 
         profiles.sort(key=lambda item: (item["type"], item["name"].casefold()))
+        # Keep an unfiltered all-types request bounded, but do not truncate a
+        # caller that explicitly selected a type or search term. This keeps
+        # material discovery complete while retaining a safe general listing.
+        bounded = not wanted and not folded_search
+        returned_profiles = profiles[:250] if bounded else profiles
         return {
             "available": True,
             "profile_root": _repo_relative(root),
-            "profiles": profiles[:250],
-            "truncated": len(profiles) > 250,
+            "profiles": returned_profiles,
+            "truncated": len(returned_profiles) < len(profiles),
+            "query": search or None,
         }
 
     def slice(
@@ -700,8 +716,12 @@ class SlicerService:
     def inspect_model(self, path: str) -> dict[str, Any]:
         return self.provider.inspect_model(path)
 
-    def list_profiles(self, profile_type: str | None = None) -> dict[str, Any]:
-        return self.provider.list_profiles(profile_type)
+    def list_profiles(
+        self,
+        profile_type: str | None = None,
+        query: str | None = None,
+    ) -> dict[str, Any]:
+        return self.provider.list_profiles(profile_type, query)
 
     def slice_model(
         self,

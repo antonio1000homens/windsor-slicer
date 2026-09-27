@@ -147,13 +147,17 @@ def slicer_inspect_model(path: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def slicer_list_profiles(profile_type: str | None = None) -> dict[str, Any]:
-    """List installed Bambu machine, process, or filament profiles."""
+def slicer_list_profiles(
+    profile_type: str | None = None,
+    query: str | None = None,
+) -> dict[str, Any]:
+    """List installed Bambu profiles, optionally filtering names by query."""
     return _safe_call(
         "slicer_list_profiles",
-        {"profile_type": profile_type},
+        {"profile_type": profile_type, "query": query},
         service.list_profiles,
         profile_type,
+        query,
     )
 
 

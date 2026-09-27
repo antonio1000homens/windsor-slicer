@@ -81,7 +81,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Detect Codespace configuration changes
+      - name: Detect live Codespace changes
         id: changes
         env:
           BEFORE_SHA: ${{ github.event.before }}
@@ -90,7 +90,7 @@ jobs:
           set -euo pipefail
           changed_files="$(git diff --name-only "$BEFORE_SHA" "$AFTER_SHA")"
           printf '%s\n' "$changed_files"
-          if printf '%s\n' "$changed_files" | grep -Eq '^(\.devcontainer/|\.github/workflows/slicer-mcp\.yml$)'; then
+          if printf '%s\n' "$changed_files" | grep -Eq '^(\.devcontainer/|\.github/workflows/slicer-mcp\.yml$|mcp_servers/|scripts/run-slicer-mcp\.sh$|scripts/slicer/)'; then
             echo "deploy=true" >> "$GITHUB_OUTPUT"
           else
             echo "deploy=false" >> "$GITHUB_OUTPUT"
@@ -131,6 +131,15 @@ jobs:
           printf 'GH_TOKEN=%s\n' "$github_codespaces_token" >> "$GITHUB_ENV"
           printf 'ORIGIN_BEARER_TOKEN=%s\n' "$origin_bearer_token" >> "$GITHUB_ENV"
 
+      - name: Sync live Codespace checkout
+        if: steps.changes.outputs.deploy == 'true'
+        run: |
+          set -euo pipefail
+          repo_dir="/workspaces/${GITHUB_REPOSITORY#*/}"
+          echo "Syncing $CODESPACE_NAME to $GITHUB_SHA"
+          gh codespace ssh --codespace "$CODESPACE_NAME" -- \
+            "set -euo pipefail; cd '$repo_dir'; git fetch --no-tags origin master; git checkout -f -B master '$GITHUB_SHA'; git reset --hard '$GITHUB_SHA'; test \"\$(git rev-parse HEAD)\" = '$GITHUB_SHA'"
+
       - name: Rebuild live Windsor Slicer Codespace
         if: steps.changes.outputs.deploy == 'true'
         run: |
@@ -152,6 +161,17 @@ jobs:
           done
           echo "Codespace did not become available after rebuild" >&2
           exit 1
+
+      - name: Verify deployed revision and profiles
+        if: steps.changes.outputs.deploy == 'true'
+        run: |
+          set -euo pipefail
+          repo_dir="/workspaces/${GITHUB_REPOSITORY#*/}"
+          deployed_sha="$(gh codespace ssh --codespace "$CODESPACE_NAME" -- "cd '$repo_dir' && git rev-parse HEAD" | tr -d '\r')"
+          echo "Deployed revision: $deployed_sha"
+          test "$deployed_sha" = "$GITHUB_SHA"
+          gh codespace ssh --codespace "$CODESPACE_NAME" -- \
+            "cd '$repo_dir' && .venv/bin/python -c 'from mcp_servers.slicer.service import BambuStudioProvider; p=BambuStudioProvider(); c=p.capabilities(); assert \"builtin_fallback_filament_profile\" in c; r=p.list_profiles(\"filament\", \"PETG\"); assert r[\"profiles\"], \"no installed PETG profiles discovered\"; assert not r[\"truncated\"]'"
 
       - name: Restore slicer port visibility
         if: steps.changes.outputs.deploy == 'true'

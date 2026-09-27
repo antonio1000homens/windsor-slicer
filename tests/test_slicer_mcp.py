@@ -170,6 +170,40 @@ class SlicerServiceTests(unittest.TestCase):
 
         self.assertEqual([item["name"] for item in result["profiles"]], ["Generic PETG"])
 
+    def test_filament_profile_discovery_is_not_truncated_before_petg(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile_dir = root / "filament"
+            profile_dir.mkdir()
+            for index in range(260):
+                (profile_dir / f"aaa-{index:03d}.json").write_text(
+                    json.dumps(
+                        {
+                            "type": "filament",
+                            "name": f"AAA Filament {index:03d}",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            (profile_dir / "petg.json").write_text(
+                json.dumps({"type": "filament", "name": "Generic PETG"}),
+                encoding="utf-8",
+            )
+            with patch(
+                "mcp_servers.slicer.service._find_profile_root", return_value=root
+            ):
+                result = self.provider.list_profiles("filament")
+                filtered = self.provider.list_profiles("filament", "petg")
+
+        names = [item["name"] for item in result["profiles"]]
+        self.assertIn("Generic PETG", names)
+        self.assertFalse(result["truncated"])
+        self.assertEqual(
+            [item["name"] for item in filtered["profiles"]],
+            ["Generic PETG"],
+        )
+        self.assertEqual(filtered["query"], "petg")
+
     def test_rejects_path_outside_allowlist(self):
         with self.assertRaises(SlicerServiceError):
             self.provider.inspect_model("/etc/passwd")
@@ -547,6 +581,12 @@ class SlicerMcpContractTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("machine_profile", schema.get("required", []))
                 self.assertNotIn("process_profile", schema.get("required", []))
                 self.assertNotIn("filament_profile", schema.get("required", []))
+
+    async def test_profile_discovery_query_is_optional(self):
+        tools = {tool.name: tool for tool in await server.mcp.list_tools()}
+        schema = tools["slicer_list_profiles"].input_schema
+        self.assertIn("query", schema.get("properties", {}))
+        self.assertNotIn("query", schema.get("required", []))
 
     def test_stdio_transport_uses_default_sdk_run(self):
         with (
