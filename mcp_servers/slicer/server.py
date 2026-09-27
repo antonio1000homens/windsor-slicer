@@ -16,6 +16,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from mcp_servers.slicer.activity import tool_error, tool_request, tool_response
 from mcp_servers.slicer.service import (
     DEFAULT_FILAMENT,
     DEFAULT_MACHINE,
@@ -78,11 +79,23 @@ mcp = _build_mcp()
 service = SlicerService()
 
 
-def _safe_call(callable_, *args, **kwargs) -> dict[str, Any]:
+def _safe_call(
+    tool_name: str,
+    arguments: dict[str, Any],
+    callable_,
+    *args,
+    **kwargs,
+) -> dict[str, Any]:
+    started = tool_request(tool_name, arguments)
     try:
-        return callable_(*args, **kwargs)
+        result = callable_(*args, **kwargs)
     except SlicerServiceError as error:
-        return {"ok": False, "error": str(error)}
+        result = {"ok": False, "error": str(error)}
+    except Exception as error:
+        tool_error(tool_name, error, started)
+        raise
+    tool_response(tool_name, result, started)
+    return result
 
 
 @mcp.tool()
@@ -91,7 +104,13 @@ def slicer_prepare_workspace(
     commit: str,
 ) -> dict[str, Any]:
     """Prepare an isolated worktree at one immutable repository commit."""
-    return _safe_call(service.prepare_workspace, repository, commit)
+    return _safe_call(
+        "slicer_prepare_workspace",
+        {"repository": repository, "commit": commit},
+        service.prepare_workspace,
+        repository,
+        commit,
+    )
 
 
 @mcp.tool()
@@ -101,6 +120,8 @@ def slicer_generate_model(
 ) -> dict[str, Any]:
     """Generate or stage one model declared in the consumer manifest."""
     return _safe_call(
+        "slicer_generate_model",
+        {"workspace": workspace, "model": model},
         service.generate_model,
         workspace,
         model,
@@ -110,19 +131,33 @@ def slicer_generate_model(
 @mcp.tool()
 def slicer_capabilities() -> dict[str, Any]:
     """Report available slicer providers, defaults and remote-access posture."""
-    return service.capabilities()
+    return _safe_call(
+        "slicer_capabilities",
+        {},
+        service.capabilities,
+    )
 
 
 @mcp.tool()
 def slicer_inspect_model(path: str) -> dict[str, Any]:
     """Inspect one STL/3MF under the repository's allowed input roots."""
-    return _safe_call(service.inspect_model, path)
+    return _safe_call(
+        "slicer_inspect_model",
+        {"path": path},
+        service.inspect_model,
+        path,
+    )
 
 
 @mcp.tool()
 def slicer_list_profiles(profile_type: str | None = None) -> dict[str, Any]:
     """List available H2D-oriented Bambu machine/process/filament profiles."""
-    return _safe_call(service.list_profiles, profile_type)
+    return _safe_call(
+        "slicer_list_profiles",
+        {"profile_type": profile_type},
+        service.list_profiles,
+        profile_type,
+    )
 
 
 @mcp.tool()
@@ -136,7 +171,18 @@ def slicer_slice(
     bed_type: str | None = None,
 ) -> dict[str, Any]:
     """Slice one model with the shared BambuStudio pipeline."""
+    arguments = {
+        "path": path,
+        "workspace": workspace,
+        "machine_profile": machine_profile,
+        "process_profile": process_profile,
+        "filament_profile": filament_profile,
+        "orient": orient,
+        "bed_type": bed_type,
+    }
     return _safe_call(
+        "slicer_slice",
+        arguments,
         service.slice_model,
         workspace=workspace,
         path_value=path,
@@ -159,7 +205,18 @@ def slicer_validate_for_print(
     bed_type: str | None = None,
 ) -> dict[str, Any]:
     """Run a real slice and return a printability result without printing."""
+    arguments = {
+        "path": path,
+        "workspace": workspace,
+        "machine_profile": machine_profile,
+        "process_profile": process_profile,
+        "filament_profile": filament_profile,
+        "orient": orient,
+        "bed_type": bed_type,
+    }
     return _safe_call(
+        "slicer_validate_for_print",
+        arguments,
         service.validate_for_print,
         workspace=workspace,
         path_value=path,
@@ -182,7 +239,18 @@ def slicer_prepare_print(
     bed_type: str | None = None,
 ) -> dict[str, Any]:
     """Generate a validated pre-sliced artifact; never start the printer."""
+    arguments = {
+        "path": path,
+        "workspace": workspace,
+        "machine_profile": machine_profile,
+        "process_profile": process_profile,
+        "filament_profile": filament_profile,
+        "orient": orient,
+        "bed_type": bed_type,
+    }
     return _safe_call(
+        "slicer_prepare_print",
+        arguments,
         service.prepare_print,
         workspace=workspace,
         path_value=path,
@@ -201,6 +269,8 @@ def slicer_get_artifact(
 ) -> dict[str, Any]:
     """Return print-artifact metadata and optionally bounded base64 file data."""
     return _safe_call(
+        "slicer_get_artifact",
+        {"path": path, "include_base64": include_base64},
         service.get_artifact,
         path,
         include_base64=include_base64,
@@ -214,6 +284,8 @@ def slicer_get_diagnostics(
 ) -> dict[str, Any]:
     """Return a bounded sanitized tail of a slicer diagnostic log."""
     return _safe_call(
+        "slicer_get_diagnostics",
+        {"log_path": log_path, "max_chars": max_chars},
         service.get_diagnostics,
         log_path,
         max_chars=max_chars,
