@@ -72,6 +72,17 @@ class SlicerClassifierTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertIn("SLICER_ERROR", payload["fatal_categories"])
 
+    def test_incompatible_plate_is_profile_mismatch(self):
+        completed, payload = self.classify(
+            "Plate 1: Cool Plate does not support filament 1\n",
+            slicer_exit=195,
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertFalse(payload["ok"])
+        self.assertIn("PROFILE_MISMATCH", payload["fatal_categories"])
+        self.assertIn("SLICER_ERROR", payload["fatal_categories"])
+
     def test_explicit_negative_return_marker_is_fatal(self):
         completed, payload = self.classify("run found error, return -13, exit...\n")
 
