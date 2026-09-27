@@ -76,6 +76,100 @@ class SlicerServiceTests(unittest.TestCase):
             "/mcp/slicer",
         )
 
+    def test_capabilities_report_environment_profiles_and_builtin_fallbacks(self):
+        configured = {
+            "SLICER_MACHINE_PROFILE": "runtime machine",
+            "SLICER_PROCESS_PROFILE": "runtime process",
+            "SLICER_FILAMENT_PROFILE": "runtime filament",
+        }
+        with patch.dict(os.environ, configured, clear=False):
+            payload = self.provider.capabilities()
+
+        self.assertEqual(payload["default_machine_profile"], "runtime machine")
+        self.assertEqual(payload["default_process_profile"], "runtime process")
+        self.assertEqual(payload["default_filament_profile"], "runtime filament")
+        self.assertEqual(
+            payload["builtin_fallback_filament_profile"],
+            "Bambu PLA Basic @BBL H2D",
+        )
+
+    def test_profile_precedence_for_machine_process_and_filament(self):
+        env_names = {
+            "machine": "SLICER_MACHINE_PROFILE",
+            "process": "SLICER_PROCESS_PROFILE",
+            "filament": "SLICER_FILAMENT_PROFILE",
+        }
+        fallbacks = {
+            "machine": "Bambu Lab H2D 0.4 nozzle",
+            "process": "0.20mm Standard @BBL H2D",
+            "filament": "Bambu PLA Basic @BBL H2D",
+        }
+        for profile_type, env_name in env_names.items():
+            with self.subTest(profile_type=profile_type):
+                override = f"request {profile_type}"
+                configured = f"environment {profile_type}"
+                kwargs = {f"{profile_type}_profile": override}
+                with (
+                    patch.dict(os.environ, {env_name: configured}, clear=False),
+                    patch(
+                        "mcp_servers.slicer.service._run_process_group",
+                        side_effect=self._successful_process,
+                    ) as mocked,
+                ):
+                    requested = self.provider.slice(
+                        str(TEST_MODEL.relative_to(ROOT)), **kwargs
+                    )
+                self.assertEqual(requested[f"{profile_type}_profile"], override)
+                self.assertEqual(mocked.call_args.kwargs["env"][env_name], override)
+
+                with (
+                    patch.dict(os.environ, {env_name: configured}, clear=False),
+                    patch(
+                        "mcp_servers.slicer.service._run_process_group",
+                        side_effect=self._successful_process,
+                    ) as mocked,
+                ):
+                    environment_default = self.provider.slice(
+                        str(TEST_MODEL.relative_to(ROOT))
+                    )
+                self.assertEqual(
+                    environment_default[f"{profile_type}_profile"], configured
+                )
+                self.assertEqual(mocked.call_args.kwargs["env"][env_name], configured)
+
+                with (
+                    patch.dict(os.environ, {}, clear=True),
+                    patch(
+                        "mcp_servers.slicer.service._run_process_group",
+                        side_effect=self._successful_process,
+                    ) as mocked,
+                ):
+                    fallback = self.provider.slice(
+                        str(TEST_MODEL.relative_to(ROOT))
+                    )
+                self.assertEqual(
+                    fallback[f"{profile_type}_profile"], fallbacks[profile_type]
+                )
+                self.assertEqual(
+                    mocked.call_args.kwargs["env"][env_name], fallbacks[profile_type]
+                )
+
+    def test_filament_profile_discovery_includes_names_without_printer_suffix(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile_dir = root / "filament"
+            profile_dir.mkdir()
+            (profile_dir / "petg.json").write_text(
+                json.dumps({"type": "filament", "name": "Generic PETG"}),
+                encoding="utf-8",
+            )
+            with patch(
+                "mcp_servers.slicer.service._find_profile_root", return_value=root
+            ):
+                result = self.provider.list_profiles("filament")
+
+        self.assertEqual([item["name"] for item in result["profiles"]], ["Generic PETG"])
+
     def test_rejects_path_outside_allowlist(self):
         with self.assertRaises(SlicerServiceError):
             self.provider.inspect_model("/etc/passwd")
@@ -440,6 +534,19 @@ class SlicerMcpContractTests(unittest.IsolatedAsyncioTestCase):
                 "slicer_get_diagnostics",
             },
         )
+
+    async def test_profile_overrides_are_optional_in_tool_schemas(self):
+        tools = {tool.name: tool for tool in await server.mcp.list_tools()}
+        for tool_name in (
+            "slicer_slice",
+            "slicer_validate_for_print",
+            "slicer_prepare_print",
+        ):
+            with self.subTest(tool=tool_name):
+                schema = tools[tool_name].input_schema
+                self.assertNotIn("machine_profile", schema.get("required", []))
+                self.assertNotIn("process_profile", schema.get("required", []))
+                self.assertNotIn("filament_profile", schema.get("required", []))
 
     def test_stdio_transport_uses_default_sdk_run(self):
         with (
