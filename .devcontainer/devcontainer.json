@@ -19,7 +19,7 @@
     "SLICER_MCP_RESOURCE_URL": "https://slicer.alf-broadcast.co.uk/mcp",
     "SLICER_MCP_ACTIVITY_LOG": "/tmp/windsor-slicer-activity.log",
     "SLICER_MCP_ACTIVITY_MAX_BYTES": "5242880",
-    "SLICER_MCP_ACTIVITY_BACKUPS": "3",
+    "SLICER_MCP_ACTIVITY_BACKUPS": "2",
     "SLICER_MCP_ACTIVITY_STDERR": "1"
   },
   "postCreateCommand": "bash .devcontainer/post-create.sh",
