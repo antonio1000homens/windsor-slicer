@@ -78,6 +78,46 @@ class WorkspaceContractTests(unittest.TestCase):
             ):
                 self.manager.resolve(self.workspace_id)
 
+    def test_resolve_rejects_assume_unchanged_bypass(self):
+        subprocess.run(
+            ["git", "-C", str(self.repo), "update-index", "--assume-unchanged", "model.stl"],
+            check=True,
+        )
+        (self.repo / "model.stl").write_bytes(b"modified")
+        status = subprocess.run(
+            ["git", "-C", str(self.repo), "status", "--porcelain=v1"],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout
+        self.assertNotIn("model.stl", status)
+        with patch.dict(os.environ, {"SLICER_ALLOWED_REPOSITORIES": "example/model-fixture"}):
+            with self.assertRaisesRegex(
+                WorkspaceError,
+                "differs from its immutable commit",
+            ):
+                self.manager.resolve(self.workspace_id)
+
+    def test_resolve_rejects_skip_worktree_bypass(self):
+        subprocess.run(
+            ["git", "-C", str(self.repo), "update-index", "--skip-worktree", "model.stl"],
+            check=True,
+        )
+        (self.repo / "model.stl").write_bytes(b"modified")
+        status = subprocess.run(
+            ["git", "-C", str(self.repo), "status", "--porcelain=v1"],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout
+        self.assertNotIn("model.stl", status)
+        with patch.dict(os.environ, {"SLICER_ALLOWED_REPOSITORIES": "example/model-fixture"}):
+            with self.assertRaisesRegex(
+                WorkspaceError,
+                "differs from its immutable commit",
+            ):
+                self.manager.resolve(self.workspace_id)
+
     def test_resolve_allows_internal_workspace_metadata_only(self):
         with patch.dict(os.environ, {"SLICER_ALLOWED_REPOSITORIES": "example/model-fixture"}):
             resolved = self.manager.resolve(self.workspace_id)
