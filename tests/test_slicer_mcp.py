@@ -365,6 +365,41 @@ class SlicerServiceTests(unittest.TestCase):
             ):
                 self.provider.slice(str(TEST_MODEL.relative_to(ROOT)))
 
+    def test_failed_result_preserves_missing_artifact_diagnostics(self):
+        def fake_process(command, **kwargs):
+            output_dir = Path(command[-1])
+            missing = output_dir / "missing.sliced.3mf"
+            (output_dir / "slicer.log").write_text(
+                "profile mismatch\n",
+                encoding="utf-8",
+            )
+            (output_dir / "result.json").write_text(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "categories": ["MISSING_OUTPUT", "PROFILE_MISMATCH"],
+                        "fatal_categories": ["MISSING_OUTPUT", "PROFILE_MISMATCH"],
+                        "slicer_exit": 2,
+                        "input": str(TEST_MODEL.resolve()),
+                        "artifact": str(missing),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(command, 2, "", "")
+
+        with patch(
+            "mcp_servers.slicer.service._run_process_group",
+            side_effect=fake_process,
+        ):
+            result = self.provider.slice(str(TEST_MODEL.relative_to(ROOT)))
+
+        self.assertFalse(result["ok"])
+        self.assertIsNone(result["artifact"])
+        self.assertTrue(result["expected_artifact"].endswith("missing.sliced.3mf"))
+        self.assertIn("PROFILE_MISMATCH", result["fatal_categories"])
+        self.assertTrue(result["log"].endswith("slicer.log"))
+
     def test_output_directory_stem_is_sanitized(self):
         input_dir = ROOT / "runtime/inputs"
         input_dir.mkdir(parents=True, exist_ok=True)

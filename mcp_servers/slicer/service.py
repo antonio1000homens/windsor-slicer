@@ -542,10 +542,14 @@ class BambuStudioProvider:
                     "slicer result artifact must be a .3mf file"
                 )
             if not artifact_path.is_file() or artifact_path.stat().st_size == 0:
-                raise SlicerServiceError(
-                    "slicer result artifact is missing or empty"
-                )
-            result["artifact"] = _repo_relative(artifact_path)
+                if result.get("ok"):
+                    raise SlicerServiceError(
+                        "slicer result artifact is missing or empty"
+                    )
+                result["expected_artifact"] = _repo_relative(artifact_path)
+                result["artifact"] = None
+            else:
+                result["artifact"] = _repo_relative(artifact_path)
         elif result.get("ok"):
             raise SlicerServiceError(
                 "successful slicer result did not include an artifact"
