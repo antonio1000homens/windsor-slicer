@@ -31,7 +31,11 @@ if [[ -f "$pid_file" ]]; then
   fi
 fi
 
-nohup env PATH="$VENV_DIR/bin:$PATH" bash scripts/run-slicer-mcp.sh >"$log_file" 2>&1 &
+# The background service has a dedicated rotating activity log, so avoid
+# duplicating every activity line into the general nohup log. Foreground/manual
+# runs still default to live stderr activity output.
+nohup env PATH="$VENV_DIR/bin:$PATH" SLICER_MCP_ACTIVITY_STDERR=0 \
+  bash scripts/run-slicer-mcp.sh >"$log_file" 2>&1 &
 echo "$!" > "$pid_file"
 
 for _ in {1..30}; do
