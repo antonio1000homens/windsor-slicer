@@ -115,6 +115,21 @@ class WorkspaceManager:
     def _workspace_id(repository: str, commit: str) -> str:
         return hashlib.sha256(f"{repository}@{commit}".encode()).hexdigest()[:20]
 
+    def _workspace_is_clean(self, path: Path) -> bool:
+        status = self._git(
+            "-C",
+            str(path),
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+        )
+        dirty = [
+            line
+            for line in status.splitlines()
+            if line and line != "?? .windsor-slicer-workspace.json"
+        ]
+        return not dirty
+
     def _ensure_commit(self, repository: str, commit: str) -> Path:
         cache = self._cache_path(repository)
         self.repo_root.mkdir(parents=True, exist_ok=True)
@@ -184,7 +199,11 @@ class WorkspaceManager:
             try:
                 meta = json.loads(metadata_path.read_text(encoding="utf-8"))
                 actual = self._git("-C", str(path), "rev-parse", "HEAD").lower()
-                reused = meta == {"repository": repository, "commit": commit} and actual == commit
+                reused = (
+                    meta == {"repository": repository, "commit": commit}
+                    and actual == commit
+                    and self._workspace_is_clean(path)
+                )
             except (OSError, ValueError, WorkspaceError):
                 reused = False
             if not reused:
@@ -216,6 +235,8 @@ class WorkspaceManager:
         expected_id = self._workspace_id(repository, commit)
         if actual != commit or normalized != expected_id:
             raise WorkspaceError("workspace repository and commit identity is invalid")
+        if not self._workspace_is_clean(path):
+            raise WorkspaceError("workspace differs from its immutable commit")
         return Workspace(normalized, repository, commit, path)
 
     def _model_spec(self, workspace: Workspace, model: str) -> dict[str, str]:
