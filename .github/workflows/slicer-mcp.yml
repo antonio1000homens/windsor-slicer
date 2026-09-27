@@ -63,3 +63,114 @@ jobs:
 
       - name: Run MCP contract tests
         run: python -m unittest discover -s tests -p 'test_slicer_mcp.py' -v
+
+  deploy-codespace-configuration:
+    name: Deploy Codespace configuration
+    needs: test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: eu-west-2
+      CODESPACE_NAME: ${{ vars.CODESPACE_NAME }}
+    steps:
+      - name: Check out repository history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect Codespace configuration changes
+        id: changes
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          changed_files="$(git diff --name-only "$BEFORE_SHA" "$AFTER_SHA")"
+          printf '%s\n' "$changed_files"
+          if printf '%s\n' "$changed_files" | grep -Eq '^(\.devcontainer/|\.github/workflows/slicer-mcp\.yml$)'; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure AWS credentials
+        if: steps.changes.outputs.deploy == 'true'
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: arn:aws:iam::243857182133:role/windsor-slicer-github-cloud-slicer-deploy-role
+          role-session-name: github-actions-windsor-slicer-codespace
+
+      - name: Load Codespace deployment credentials
+        if: steps.changes.outputs.deploy == 'true'
+        run: |
+          set -euo pipefail
+          test -n "$CODESPACE_NAME"
+
+          get_parameter() {
+            aws ssm get-parameter \
+              --region "$AWS_REGION" \
+              --name "/windsor-slicer/cloud-slicer/$1" \
+              --with-decryption \
+              --query 'Parameter.Value' \
+              --output text
+          }
+
+          github_codespaces_token="$(get_parameter github-codespaces-token)"
+          origin_bearer_token="$(get_parameter origin-bearer-token)"
+          test -n "$github_codespaces_token"
+          test -n "$origin_bearer_token"
+          test "$github_codespaces_token" != "None"
+          test "$origin_bearer_token" != "None"
+
+          printf '::add-mask::%s\n' "$github_codespaces_token"
+          printf '::add-mask::%s\n' "$origin_bearer_token"
+          printf 'GH_TOKEN=%s\n' "$github_codespaces_token" >> "$GITHUB_ENV"
+          printf 'ORIGIN_BEARER_TOKEN=%s\n' "$origin_bearer_token" >> "$GITHUB_ENV"
+
+      - name: Rebuild live Windsor Slicer Codespace
+        if: steps.changes.outputs.deploy == 'true'
+        run: |
+          set -euo pipefail
+          echo "Rebuilding Codespace: $CODESPACE_NAME"
+          gh codespace rebuild --codespace "$CODESPACE_NAME"
+
+      - name: Wait for Codespace to become available
+        if: steps.changes.outputs.deploy == 'true'
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            state="$(gh codespace view --codespace "$CODESPACE_NAME" --json state --jq '.state' 2>/dev/null || true)"
+            echo "Codespace state: ${state:-unknown}"
+            if [[ "$state" == "Available" || "$state" == "available" ]]; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Codespace did not become available after rebuild" >&2
+          exit 1
+
+      - name: Restore slicer port visibility
+        if: steps.changes.outputs.deploy == 'true'
+        run: gh codespace ports visibility 8000:public --codespace "$CODESPACE_NAME"
+
+      - name: Smoke-test rebuilt slicer
+        if: steps.changes.outputs.deploy == 'true'
+        run: |
+          set -euo pipefail
+          health_url="https://${CODESPACE_NAME}-8000.app.github.dev/health"
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error \
+              --header "Authorization: Bearer $ORIGIN_BEARER_TOKEN" \
+              "$health_url"; then
+              echo
+              echo "Windsor Slicer health check passed."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Windsor Slicer health check failed after Codespace rebuild" >&2
+          exit 1
