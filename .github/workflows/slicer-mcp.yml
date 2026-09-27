@@ -162,17 +162,6 @@ jobs:
           echo "Codespace did not become available after rebuild" >&2
           exit 1
 
-      - name: Verify deployed revision and profiles
-        if: steps.changes.outputs.deploy == 'true'
-        run: |
-          set -euo pipefail
-          repo_dir="/workspaces/${GITHUB_REPOSITORY#*/}"
-          deployed_sha="$(gh codespace ssh --codespace "$CODESPACE_NAME" -- "cd '$repo_dir' && git rev-parse HEAD" | tr -d '\r')"
-          echo "Deployed revision: $deployed_sha"
-          test "$deployed_sha" = "$GITHUB_SHA"
-          gh codespace ssh --codespace "$CODESPACE_NAME" -- \
-            "set -euo pipefail; cd '$repo_dir'; pid=\$(cat /tmp/windsor-slicer-mcp.pid); python_bin=\$(readlink -f /proc/\$pid/exe); test -x \"\$python_bin\"; \"\$python_bin\" -c 'from mcp_servers.slicer.service import BambuStudioProvider; p=BambuStudioProvider(); c=p.capabilities(); assert \"builtin_fallback_filament_profile\" in c; r=p.list_profiles(\"filament\", \"PETG\"); assert r[\"profiles\"], \"no installed PETG profiles discovered\"; assert not r[\"truncated\"]'"
-
       - name: Restore slicer port visibility
         if: steps.changes.outputs.deploy == 'true'
         run: gh codespace ports visibility 8000:public --codespace "$CODESPACE_NAME"
@@ -194,3 +183,15 @@ jobs:
           done
           echo "Windsor Slicer health check failed after Codespace rebuild" >&2
           exit 1
+
+      - name: Verify deployed revision and profiles
+        if: steps.changes.outputs.deploy == 'true'
+        run: |
+          set -euo pipefail
+          repo_dir="/workspaces/${GITHUB_REPOSITORY#*/}"
+          deployed_sha="$(gh codespace ssh --codespace "$CODESPACE_NAME" -- "cd '$repo_dir' && git rev-parse HEAD" | tr -d '\r')"
+          echo "Deployed revision: $deployed_sha"
+          test "$deployed_sha" = "$GITHUB_SHA"
+          gh codespace ssh --codespace "$CODESPACE_NAME" -- \
+            "set -euo pipefail; cd '$repo_dir'; pid=\$(cat /tmp/windsor-slicer-mcp.pid); python_bin=\$(readlink -f /proc/\$pid/exe); test -x \"\$python_bin\"; \"\$python_bin\" -c 'from mcp_servers.slicer.service import BambuStudioProvider; p=BambuStudioProvider(); c=p.capabilities(); assert \"builtin_fallback_filament_profile\" in c; r=p.list_profiles(\"filament\", \"PETG\"); assert r[\"profiles\"], \"no installed PETG profiles discovered\"; assert not r[\"truncated\"]'"
+
