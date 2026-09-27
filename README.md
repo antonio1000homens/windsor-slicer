@@ -35,3 +35,27 @@ The Codespace devcontainer installs OpenSCAD and the pinned Bambu Studio runtime
 ChatGPT authenticates through Cloudflare Access Managed OAuth. The Worker verifies `Cf-Access-Jwt-Assertion` against `ACCESS_ISSUER`, `ACCESS_AUDIENCE`, and optional `ACCESS_ADDITIONAL_AUDIENCES` using Cloudflare JWKS. Cloudflare Access policy controls users; the Worker has no email allowlist. It removes external identity credentials and sends only `Authorization: Bearer <ORIGIN_BEARER_TOKEN>` to the Codespace. That secret must equal the Codespace's `SLICER_MCP_BEARER_TOKEN`.
 
 The production Worker deployment is gated until direct Codespace acceptance passes. The shared Access application and zone WAF rules are owned by `windsor-app`; this repository owns Worker-side validation only.
+
+
+## Live MCP activity
+
+The Codespace MCP writes a sanitized, bounded activity stream containing MCP tool
+requests/results and the child-process commands/results they trigger.
+
+Watch it live from a Codespace terminal:
+
+```sh
+tail -f /tmp/windsor-slicer-activity.log
+```
+
+The default Codespace settings rotate at 5 MiB and keep two backups, so the
+activity history is capped at roughly 15 MiB. Rotation deletes the oldest file
+automatically. Foreground/manual MCP runs also emit the same activity to stderr;
+the background Codespace service disables that duplicate stderr copy because it
+already writes the rotating activity file.
+
+Useful overrides are `SLICER_MCP_ACTIVITY_LOG`,
+`SLICER_MCP_ACTIVITY_MAX_BYTES`, `SLICER_MCP_ACTIVITY_BACKUPS`,
+`SLICER_MCP_ACTIVITY_STDERR`, and `SLICER_MCP_ACTIVITY_FIELD_CHARS`.
+Sensitive token/authorization/password fields are redacted and large values,
+including inline base64 artifacts, are bounded or omitted.
