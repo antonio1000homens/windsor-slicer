@@ -18,9 +18,6 @@ from starlette.routing import Route
 
 from mcp_servers.slicer.activity import tool_error, tool_request, tool_response
 from mcp_servers.slicer.service import (
-    DEFAULT_FILAMENT,
-    DEFAULT_MACHINE,
-    DEFAULT_PROCESS,
     SlicerService,
     SlicerServiceError,
 )
@@ -151,7 +148,7 @@ def slicer_inspect_model(path: str) -> dict[str, Any]:
 
 @mcp.tool()
 def slicer_list_profiles(profile_type: str | None = None) -> dict[str, Any]:
-    """List available H2D-oriented Bambu machine/process/filament profiles."""
+    """List installed Bambu machine, process, or filament profiles."""
     return _safe_call(
         "slicer_list_profiles",
         {"profile_type": profile_type},
@@ -164,9 +161,9 @@ def slicer_list_profiles(profile_type: str | None = None) -> dict[str, Any]:
 def slicer_slice(
     path: str,
     workspace: str | None = None,
-    machine_profile: str = DEFAULT_MACHINE,
-    process_profile: str = DEFAULT_PROCESS,
-    filament_profile: str = DEFAULT_FILAMENT,
+    machine_profile: str | None = None,
+    process_profile: str | None = None,
+    filament_profile: str | None = None,
     orient: bool = False,
     bed_type: str | None = None,
 ) -> dict[str, Any]:
@@ -198,9 +195,9 @@ def slicer_slice(
 def slicer_validate_for_print(
     path: str,
     workspace: str | None = None,
-    machine_profile: str = DEFAULT_MACHINE,
-    process_profile: str = DEFAULT_PROCESS,
-    filament_profile: str = DEFAULT_FILAMENT,
+    machine_profile: str | None = None,
+    process_profile: str | None = None,
+    filament_profile: str | None = None,
     orient: bool = False,
     bed_type: str | None = None,
 ) -> dict[str, Any]:
@@ -232,9 +229,9 @@ def slicer_validate_for_print(
 def slicer_prepare_print(
     path: str,
     workspace: str | None = None,
-    machine_profile: str = DEFAULT_MACHINE,
-    process_profile: str = DEFAULT_PROCESS,
-    filament_profile: str = DEFAULT_FILAMENT,
+    machine_profile: str | None = None,
+    process_profile: str | None = None,
+    filament_profile: str | None = None,
     orient: bool = False,
     bed_type: str | None = None,
 ) -> dict[str, Any]:

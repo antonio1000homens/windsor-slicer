@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,12 +64,20 @@ class WorkspaceManager:
             raise WorkspaceError("SLICER_ALLOWED_REPOSITORIES contains an invalid repository")
         return allowed
 
-    def _run(self, args: list[str], *, cwd: Path | None = None, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
+    def _run(
+        self,
+        args: list[str],
+        *,
+        cwd: Path | None = None,
+        timeout: int | None = None,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         started = command_request(args, cwd=cwd)
         try:
             completed = subprocess.run(
                 args,
                 cwd=cwd,
+                env=env,
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -90,8 +99,14 @@ class WorkspaceManager:
         )
         return completed
 
-    def _git(self, *args: str, cwd: Path | None = None, timeout: int | None = None) -> str:
-        completed = self._run(["git", *args], cwd=cwd, timeout=timeout)
+    def _git(
+        self,
+        *args: str,
+        cwd: Path | None = None,
+        timeout: int | None = None,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        completed = self._run(["git", *args], cwd=cwd, timeout=timeout, env=env)
         if completed.returncode != 0:
             raise WorkspaceError("git workspace operation failed")
         return completed.stdout.strip()
@@ -114,6 +129,47 @@ class WorkspaceManager:
     @staticmethod
     def _workspace_id(repository: str, commit: str) -> str:
         return hashlib.sha256(f"{repository}@{commit}".encode()).hexdigest()[:20]
+
+    @staticmethod
+    def _status_is_clean(status: str) -> bool:
+        metadata_lines = {
+            "?? .windsor-slicer-workspace.json",
+            "!! .windsor-slicer-workspace.json",
+        }
+        return not any(
+            line for line in status.splitlines() if line and line not in metadata_lines
+        )
+
+    def _workspace_is_clean(self, path: Path) -> bool:
+        # First preserve the normal Git status check so staged/index-only changes
+        # and ordinary untracked files still invalidate an immutable workspace.
+        status = self._git(
+            "-C",
+            str(path),
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+        )
+        if not self._status_is_clean(status):
+            return False
+
+        # Do not trust the worktree's real index for content integrity. Flags such
+        # as assume-unchanged and skip-worktree can hide modified tracked files
+        # from normal status output. Rebuild an independent temporary index from
+        # HEAD, then compare the worktree against that commit-backed index.
+        with tempfile.TemporaryDirectory(prefix="windsor-slicer-index-") as temp_dir:
+            index_path = Path(temp_dir) / "index"
+            clean_env = {**os.environ, "GIT_INDEX_FILE": str(index_path)}
+            self._git("-C", str(path), "read-tree", "HEAD", env=clean_env)
+            verified_status = self._git(
+                "-C",
+                str(path),
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                env=clean_env,
+            )
+        return self._status_is_clean(verified_status)
 
     def _ensure_commit(self, repository: str, commit: str) -> Path:
         cache = self._cache_path(repository)
@@ -184,7 +240,11 @@ class WorkspaceManager:
             try:
                 meta = json.loads(metadata_path.read_text(encoding="utf-8"))
                 actual = self._git("-C", str(path), "rev-parse", "HEAD").lower()
-                reused = meta == {"repository": repository, "commit": commit} and actual == commit
+                reused = (
+                    meta == {"repository": repository, "commit": commit}
+                    and actual == commit
+                    and self._workspace_is_clean(path)
+                )
             except (OSError, ValueError, WorkspaceError):
                 reused = False
             if not reused:
@@ -216,6 +276,8 @@ class WorkspaceManager:
         expected_id = self._workspace_id(repository, commit)
         if actual != commit or normalized != expected_id:
             raise WorkspaceError("workspace repository and commit identity is invalid")
+        if not self._workspace_is_clean(path):
+            raise WorkspaceError("workspace differs from its immutable commit")
         return Workspace(normalized, repository, commit, path)
 
     def _model_spec(self, workspace: Workspace, model: str) -> dict[str, str]:

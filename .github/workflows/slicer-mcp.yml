@@ -6,7 +6,7 @@ on:
       - 'mcp_servers/**'
       - 'scripts/run-slicer-mcp.sh'
       - 'scripts/slicer/**'
-      - 'tests/test_slicer_mcp.py'
+      - 'tests/**'
       - 'cloud/slicer-worker/**'
       - 'tests/test_slicer_worker.js'
       - '.devcontainer/**'
@@ -19,7 +19,7 @@ on:
       - 'mcp_servers/**'
       - 'scripts/run-slicer-mcp.sh'
       - 'scripts/slicer/**'
-      - 'tests/test_slicer_mcp.py'
+      - 'tests/**'
       - 'cloud/slicer-worker/**'
       - 'tests/test_slicer_worker.js'
       - '.devcontainer/**'
@@ -61,8 +61,8 @@ jobs:
           bash -n .devcontainer/post-start.sh
           bash -n scripts/slicer/run-codespace-mcp-smoke.sh
 
-      - name: Run MCP contract tests
-        run: python -m unittest discover -s tests -p 'test_slicer_mcp.py' -v
+      - name: Run Python slicer tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
 
   deploy-codespace-configuration:
     name: Deploy Codespace configuration

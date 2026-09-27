@@ -34,6 +34,14 @@ DEFAULT_FILAMENT = "Bambu PLA Basic @BBL H2D"
 DEFAULT_TIMEOUT_SECONDS = 900
 DEFAULT_RETENTION_HOURS = 24
 
+
+def _resolve_profile(requested: str | None, env_name: str, fallback: str) -> str:
+    if requested is not None and requested.strip():
+        return requested.strip()
+    configured = os.environ.get(env_name, "").strip()
+    return configured or fallback
+
+
 def _runtime_input_root() -> Path:
     configured = os.environ.get("SLICER_RUNTIME_ROOT", "").strip()
     runtime = Path(configured).expanduser() if configured else ROOT / "runtime"
@@ -304,9 +312,18 @@ class BambuStudioProvider:
             "install_script_available": INSTALL_SCRIPT.is_file(),
             "slice_script_available": SLICE_SCRIPT.is_file(),
             "version": os.environ.get("BAMBU_STUDIO_VERSION", "v02.08.02.61"),
-            "default_machine_profile": DEFAULT_MACHINE,
-            "default_process_profile": DEFAULT_PROCESS,
-            "default_filament_profile": DEFAULT_FILAMENT,
+            "default_machine_profile": _resolve_profile(
+                None, "SLICER_MACHINE_PROFILE", DEFAULT_MACHINE
+            ),
+            "default_process_profile": _resolve_profile(
+                None, "SLICER_PROCESS_PROFILE", DEFAULT_PROCESS
+            ),
+            "default_filament_profile": _resolve_profile(
+                None, "SLICER_FILAMENT_PROFILE", DEFAULT_FILAMENT
+            ),
+            "builtin_fallback_machine_profile": DEFAULT_MACHINE,
+            "builtin_fallback_process_profile": DEFAULT_PROCESS,
+            "builtin_fallback_filament_profile": DEFAULT_FILAMENT,
             "printer_model": "h2d",
             "printer_handoff_available": False,
         }
@@ -383,7 +400,8 @@ class BambuStudioProvider:
                 continue
             if wanted and kind != wanted:
                 continue
-            # Keep the MCP response bounded and useful for this H2D repository.
+            # Machine and process results are scoped to this H2D service. Filament
+            # profiles are printer/material choices and may omit the printer name.
             lower_name = name.casefold()
             if "h2d" not in lower_name and kind != "filament":
                 continue
@@ -407,12 +425,21 @@ class BambuStudioProvider:
         self,
         path_value: str,
         *,
-        machine_profile: str = DEFAULT_MACHINE,
-        process_profile: str = DEFAULT_PROCESS,
-        filament_profile: str = DEFAULT_FILAMENT,
+        machine_profile: str | None = None,
+        process_profile: str | None = None,
+        filament_profile: str | None = None,
         orient: bool = False,
         bed_type: str | None = None,
     ) -> dict[str, Any]:
+        machine_profile = _resolve_profile(
+            machine_profile, "SLICER_MACHINE_PROFILE", DEFAULT_MACHINE
+        )
+        process_profile = _resolve_profile(
+            process_profile, "SLICER_PROCESS_PROFILE", DEFAULT_PROCESS
+        )
+        filament_profile = _resolve_profile(
+            filament_profile, "SLICER_FILAMENT_PROFILE", DEFAULT_FILAMENT
+        )
         path = _resolve_model(path_value)
         if not SLICE_SCRIPT.is_file():
             raise SlicerServiceError("shared slicer script is missing")

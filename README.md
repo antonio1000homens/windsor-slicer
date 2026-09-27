@@ -30,6 +30,12 @@ node --test tests/test_slicer_worker.js
 
 The Codespace devcontainer installs OpenSCAD and the pinned Bambu Studio runtime. On start, the authenticated MCP listens on port 8000 only when `SLICER_MCP_BEARER_TOKEN` is configured. The Codespace must also receive `SLICER_ALLOWED_REPOSITORIES` as a Codespaces secret or environment variable.
 
+## Bambu profile selection
+
+`slicer_slice`, `slicer_validate_for_print`, and `slicer_prepare_print` accept optional per-job `machine_profile`, `process_profile`, and `filament_profile` overrides. Each setting resolves in this order: explicit request, corresponding `SLICER_*_PROFILE` runtime environment value, then the built-in fallback. The current Codespace defaults are `Bambu Lab H2D 0.4 nozzle`, `0.20mm Standard @BBL H2D`, and `Bambu PLA Basic @BBL H2D` for machine, process, and filament respectively. `slicer_capabilities` reports the effective runtime defaults and the built-in fallbacks.
+
+To select PETG, call `slicer_list_profiles(profile_type="filament")`, choose the exact installed PETG profile name from the response, then pass that name as `filament_profile` to the desired prepare, validation, or slice call. Profile names are discovered from the installed Bambu Studio profile tree; PETG is not hard-coded. This changes material for that job and does not require editing `devcontainer.json` or rebuilding the Codespace.
+
 ## MCP authentication
 
 ChatGPT authenticates through Cloudflare Access Managed OAuth. The Worker verifies `Cf-Access-Jwt-Assertion` against `ACCESS_ISSUER`, `ACCESS_AUDIENCE`, and optional `ACCESS_ADDITIONAL_AUDIENCES` using Cloudflare JWKS. Cloudflare Access policy controls users; the Worker has no email allowlist. It removes external identity credentials and sends only `Authorization: Bearer <ORIGIN_BEARER_TOKEN>` to the Codespace. That secret must equal the Codespace's `SLICER_MCP_BEARER_TOKEN`.

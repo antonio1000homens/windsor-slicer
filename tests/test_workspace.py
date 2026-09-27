@@ -20,11 +20,19 @@ class WorkspaceContractTests(unittest.TestCase):
         self.repo = (self.runtime / "workspaces" / "fixture").resolve()
         self.repo.mkdir(parents=True)
         (self.repo / "model.stl").write_bytes(b"stl")
+        (self.repo / ".windsor-slicer.yaml").write_text(
+            "version: 1\nmodels:\n  fixture:\n    source: model.stl\n"
+            "    generator: copy\n    output: staged.stl\n",
+            encoding="utf-8",
+        )
         self.manager = WorkspaceManager(root=self.root, runtime_root=self.runtime)
         subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
         subprocess.run(["git", "-C", str(self.repo), "config", "user.email", "tests@example.test"], check=True)
         subprocess.run(["git", "-C", str(self.repo), "config", "user.name", "Slicer tests"], check=True)
-        subprocess.run(["git", "-C", str(self.repo), "add", "model.stl"], check=True)
+        subprocess.run(
+            ["git", "-C", str(self.repo), "add", "model.stl", ".windsor-slicer.yaml"],
+            check=True,
+        )
         subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "fixture"], check=True)
         self.commit = subprocess.run(["git", "-C", str(self.repo), "rev-parse", "HEAD"], check=True, text=True, capture_output=True).stdout.strip()
         self.repository = "example/model-fixture"
@@ -61,11 +69,61 @@ class WorkspaceContractTests(unittest.TestCase):
         self.assertFalse(self.repo.exists())
         self.assertFalse(staged.exists())
 
-    def test_copy_manifest_stages_only_committed_mesh_to_runtime_input_root(self):
-        (self.repo / ".windsor-slicer.yaml").write_text(
-            "version: 1\nmodels:\n  fixture:\n    source: model.stl\n    generator: copy\n    output: staged.stl\n",
-            encoding="utf-8",
+    def test_resolve_rejects_modified_workspace_contents(self):
+        (self.repo / "model.stl").write_bytes(b"modified")
+        with patch.dict(os.environ, {"SLICER_ALLOWED_REPOSITORIES": "example/model-fixture"}):
+            with self.assertRaisesRegex(
+                WorkspaceError,
+                "differs from its immutable commit",
+            ):
+                self.manager.resolve(self.workspace_id)
+
+    def test_resolve_rejects_assume_unchanged_bypass(self):
+        subprocess.run(
+            ["git", "-C", str(self.repo), "update-index", "--assume-unchanged", "model.stl"],
+            check=True,
         )
+        (self.repo / "model.stl").write_bytes(b"modified")
+        status = subprocess.run(
+            ["git", "-C", str(self.repo), "status", "--porcelain=v1"],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout
+        self.assertNotIn("model.stl", status)
+        with patch.dict(os.environ, {"SLICER_ALLOWED_REPOSITORIES": "example/model-fixture"}):
+            with self.assertRaisesRegex(
+                WorkspaceError,
+                "differs from its immutable commit",
+            ):
+                self.manager.resolve(self.workspace_id)
+
+    def test_resolve_rejects_skip_worktree_bypass(self):
+        subprocess.run(
+            ["git", "-C", str(self.repo), "update-index", "--skip-worktree", "model.stl"],
+            check=True,
+        )
+        (self.repo / "model.stl").write_bytes(b"modified")
+        status = subprocess.run(
+            ["git", "-C", str(self.repo), "status", "--porcelain=v1"],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout
+        self.assertNotIn("model.stl", status)
+        with patch.dict(os.environ, {"SLICER_ALLOWED_REPOSITORIES": "example/model-fixture"}):
+            with self.assertRaisesRegex(
+                WorkspaceError,
+                "differs from its immutable commit",
+            ):
+                self.manager.resolve(self.workspace_id)
+
+    def test_resolve_allows_internal_workspace_metadata_only(self):
+        with patch.dict(os.environ, {"SLICER_ALLOWED_REPOSITORIES": "example/model-fixture"}):
+            resolved = self.manager.resolve(self.workspace_id)
+        self.assertEqual(resolved.commit, self.commit)
+
+    def test_copy_manifest_stages_only_committed_mesh_to_runtime_input_root(self):
         with patch.dict(os.environ, {"SLICER_ALLOWED_REPOSITORIES": "example/model-fixture"}):
             result = self.manager.generate_model(workspace_id=self.workspace_id, model="fixture")
         staged = self.root / result["path"]
