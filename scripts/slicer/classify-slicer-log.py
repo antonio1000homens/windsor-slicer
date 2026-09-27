@@ -36,7 +36,8 @@ RULES = [
         "PROFILE_MISMATCH",
         re.compile(
             r"profile.*(?:mismatch|incompatible)|"
-            r"not\s+compatible\s+with.*printer",
+            r"not\s+compatible\s+with.*printer|"
+            r"(?:plate|bed).*does\s+not\s+support\s+filament",
             re.I,
         ),
     ),
