@@ -61,6 +61,20 @@ class WorkspaceContractTests(unittest.TestCase):
         self.assertFalse(self.repo.exists())
         self.assertFalse(staged.exists())
 
+    def test_resolve_rejects_modified_workspace_contents(self):
+        (self.repo / "model.stl").write_bytes(b"modified")
+        with patch.dict(os.environ, {"SLICER_ALLOWED_REPOSITORIES": "example/model-fixture"}):
+            with self.assertRaisesRegex(
+                WorkspaceError,
+                "differs from its immutable commit",
+            ):
+                self.manager.resolve(self.workspace_id)
+
+    def test_resolve_allows_internal_workspace_metadata_only(self):
+        with patch.dict(os.environ, {"SLICER_ALLOWED_REPOSITORIES": "example/model-fixture"}):
+            resolved = self.manager.resolve(self.workspace_id)
+        self.assertEqual(resolved.commit, self.commit)
+
     def test_copy_manifest_stages_only_committed_mesh_to_runtime_input_root(self):
         (self.repo / ".windsor-slicer.yaml").write_text(
             "version: 1\nmodels:\n  fixture:\n    source: model.stl\n    generator: copy\n    output: staged.stl\n",
