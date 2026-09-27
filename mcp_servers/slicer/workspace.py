@@ -15,6 +15,8 @@ from typing import Any
 
 import yaml
 
+from mcp_servers.slicer.activity import command_error, command_request, command_response
+
 
 ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$")
@@ -62,10 +64,31 @@ class WorkspaceManager:
         return allowed
 
     def _run(self, args: list[str], *, cwd: Path | None = None, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
+        started = command_request(args, cwd=cwd)
         try:
-            return subprocess.run(args, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout or self.timeout_seconds, check=False)
+            completed = subprocess.run(
+                args,
+                cwd=cwd,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout or self.timeout_seconds,
+                check=False,
+            )
         except subprocess.TimeoutExpired as error:
+            command_error(args, error, started)
             raise WorkspaceError("workspace command timed out") from error
+        except Exception as error:
+            command_error(args, error, started)
+            raise
+        command_response(
+            args,
+            returncode=completed.returncode,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+            started=started,
+        )
+        return completed
 
     def _git(self, *args: str, cwd: Path | None = None, timeout: int | None = None) -> str:
         completed = self._run(["git", *args], cwd=cwd, timeout=timeout)
