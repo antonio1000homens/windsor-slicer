@@ -20,6 +20,11 @@ class WorkspaceContractTests(unittest.TestCase):
         self.repo = (self.runtime / "workspaces" / "fixture").resolve()
         self.repo.mkdir(parents=True)
         (self.repo / "model.stl").write_bytes(b"stl")
+        (self.repo / ".windsor-slicer.yaml").write_text(
+            "version: 1\nmodels:\n  fixture:\n    source: model.stl\n"
+            "    generator: copy\n    output: staged.stl\n",
+            encoding="utf-8",
+        )
         self.manager = WorkspaceManager(root=self.root, runtime_root=self.runtime)
         subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
         subprocess.run(["git", "-C", str(self.repo), "config", "user.email", "tests@example.test"], check=True)
@@ -76,10 +81,6 @@ class WorkspaceContractTests(unittest.TestCase):
         self.assertEqual(resolved.commit, self.commit)
 
     def test_copy_manifest_stages_only_committed_mesh_to_runtime_input_root(self):
-        (self.repo / ".windsor-slicer.yaml").write_text(
-            "version: 1\nmodels:\n  fixture:\n    source: model.stl\n    generator: copy\n    output: staged.stl\n",
-            encoding="utf-8",
-        )
         with patch.dict(os.environ, {"SLICER_ALLOWED_REPOSITORIES": "example/model-fixture"}):
             result = self.manager.generate_model(workspace_id=self.workspace_id, model="fixture")
         staged = self.root / result["path"]
