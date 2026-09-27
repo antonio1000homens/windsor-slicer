@@ -29,7 +29,10 @@ class WorkspaceContractTests(unittest.TestCase):
         subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
         subprocess.run(["git", "-C", str(self.repo), "config", "user.email", "tests@example.test"], check=True)
         subprocess.run(["git", "-C", str(self.repo), "config", "user.name", "Slicer tests"], check=True)
-        subprocess.run(["git", "-C", str(self.repo), "add", "model.stl"], check=True)
+        subprocess.run(
+            ["git", "-C", str(self.repo), "add", "model.stl", ".windsor-slicer.yaml"],
+            check=True,
+        )
         subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "fixture"], check=True)
         self.commit = subprocess.run(["git", "-C", str(self.repo), "rev-parse", "HEAD"], check=True, text=True, capture_output=True).stdout.strip()
         self.repository = "example/model-fixture"
