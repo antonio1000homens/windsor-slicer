@@ -97,6 +97,55 @@ def _resolve_output(path: Path) -> Path:
     return resolved
 
 
+def _inline_transfer_limit() -> int:
+    raw = os.environ.get("SLICER_MCP_MAX_ARTIFACT_BYTES", "10485760").strip()
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise SlicerServiceError(
+            "SLICER_MCP_MAX_ARTIFACT_BYTES must be an integer"
+        ) from error
+    if value < 1:
+        raise SlicerServiceError(
+            "SLICER_MCP_MAX_ARTIFACT_BYTES must be greater than zero"
+        )
+    return value
+
+
+def _file_transfer_payload(
+    path: Path,
+    *,
+    include_base64: bool,
+    allowed_suffixes: set[str],
+    kind: str,
+) -> dict[str, Any]:
+    """Return bounded file-transfer metadata without changing storage roots."""
+    suffix = path.suffix.lower()
+    if suffix not in allowed_suffixes:
+        if kind == "artifact":
+            raise SlicerServiceError("artifact must be a .3mf file")
+        raise SlicerServiceError("model path must end in .stl or .3mf")
+    if not path.is_file() or path.stat().st_size == 0:
+        raise SlicerServiceError(f"{kind} does not exist or is empty")
+
+    data = path.read_bytes()
+    size = len(data)
+    result: dict[str, Any] = {
+        "ok": True,
+        "path": _repo_relative(path),
+        "filename": path.name,
+        "size_bytes": size,
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+    if include_base64:
+        if size > _inline_transfer_limit():
+            raise SlicerServiceError(
+                f"{kind} is too large for inline MCP transfer"
+            )
+        result["base64"] = base64.b64encode(data).decode("ascii")
+    return result
+
+
 def _safe_output_stem(value: str) -> str:
     """Return a bounded filesystem-safe label for MCP output directories."""
     sanitized = re.sub(r"[^A-Za-z0-9._-]+", "-", value)
@@ -628,6 +677,20 @@ class SlicerService:
         except WorkspaceError as error:
             raise SlicerServiceError(str(error)) from error
 
+    def get_model(
+        self,
+        path: str,
+        *,
+        include_base64: bool = False,
+    ) -> dict[str, Any]:
+        model = _resolve_model(path)
+        return _file_transfer_payload(
+            model,
+            include_base64=include_base64,
+            allowed_suffixes={".stl", ".3mf"},
+            kind="model",
+        )
+
     def get_artifact(
         self,
         path: str,
@@ -637,30 +700,12 @@ class SlicerService:
         requested = Path(path)
         candidate = requested if requested.is_absolute() else ROOT / requested
         artifact = _resolve_output(candidate)
-        if artifact.suffix.lower() != ".3mf":
-            raise SlicerServiceError("artifact must be a .3mf file")
-        if not artifact.is_file() or artifact.stat().st_size == 0:
-            raise SlicerServiceError("artifact does not exist or is empty")
-        size = artifact.stat().st_size
-        digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
-        result: dict[str, Any] = {
-            "ok": True,
-            "path": _repo_relative(artifact),
-            "size_bytes": size,
-            "sha256": digest,
-        }
-        if include_base64:
-            max_bytes = int(
-                os.environ.get("SLICER_MCP_MAX_ARTIFACT_BYTES", "10485760")
-            )
-            if size > max_bytes:
-                raise SlicerServiceError(
-                    "artifact is too large for inline MCP transfer"
-                )
-            result["base64"] = base64.b64encode(artifact.read_bytes()).decode(
-                "ascii"
-            )
-        return result
+        return _file_transfer_payload(
+            artifact,
+            include_base64=include_base64,
+            allowed_suffixes={".3mf"},
+            kind="artifact",
+        )
 
     def get_diagnostics(
         self,
@@ -702,9 +747,8 @@ class SlicerService:
                 "allowed_repositories": sorted(self.workspace_manager.allowed_repositories),
                 "supported": True,
                 "generated_input_root": "runtime/inputs/",
-                "artifact_inline_limit_bytes": int(
-                    os.environ.get("SLICER_MCP_MAX_ARTIFACT_BYTES", "10485760")
-                ),
+                "artifact_inline_limit_bytes": _inline_transfer_limit(),
+                "model_inline_limit_bytes": _inline_transfer_limit(),
             },
             "cloudflare_remote_endpoint": {
                 "configured": False,
