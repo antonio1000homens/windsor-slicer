@@ -43,7 +43,7 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         description=(
             "Exercise the complete authenticated MCP path: immutable workspace, "
-            "OpenSCAD generation, Bambu Studio validation and sliced 3MF retrieval."
+            "model generation/retrieval, Bambu Studio validation and sliced 3MF retrieval."
         )
     )
     result.add_argument(
@@ -57,7 +57,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--download-dir",
         default="artifacts/slicer-smoke",
-        help="Directory for the retrieved sliced 3MF.",
+        help="Directory for retrieved generated models and sliced 3MF files.",
     )
     return result
 
@@ -92,6 +92,19 @@ async def call_tool(
     return payload
 
 
+def decode_retrieved_file(payload: dict[str, Any], label: str) -> bytes:
+    encoded = payload.get("base64")
+    if not isinstance(encoded, str) or not encoded:
+        raise SmokeFailure(f"{label} retrieval did not return file data")
+    data = base64.b64decode(encoded, validate=True)
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != payload.get("sha256"):
+        raise SmokeFailure(f"{label} SHA-256 does not match server metadata")
+    if len(data) != payload.get("size_bytes"):
+        raise SmokeFailure(f"{label} size does not match server metadata")
+    return data
+
+
 async def run(args: argparse.Namespace) -> int:
     token = os.environ.get("SLICER_MCP_BEARER_TOKEN", "").strip()
     if not token:
@@ -117,6 +130,7 @@ async def run(args: argparse.Namespace) -> int:
             required = {
                 "slicer_prepare_workspace",
                 "slicer_generate_model",
+                "slicer_get_model",
                 "slicer_validate_for_print",
                 "slicer_get_diagnostics",
                 "slicer_get_artifact",
@@ -150,6 +164,16 @@ async def run(args: argparse.Namespace) -> int:
                 timings,
             )
             model_path = str(generated["path"])
+            generated_file = await call_tool(
+                client,
+                "slicer_get_model",
+                {"path": model_path, "include_base64": True},
+                timings,
+            )
+            generated_data = decode_retrieved_file(
+                generated_file,
+                "generated model",
+            )
 
             validation = await call_tool(
                 client,
@@ -209,20 +233,14 @@ async def run(args: argparse.Namespace) -> int:
                 timings,
             )
 
-    encoded = artifact.get("base64")
-    if not isinstance(encoded, str) or not encoded:
-        raise SmokeFailure("artifact retrieval did not return file data")
-    data = base64.b64decode(encoded, validate=True)
-    digest = hashlib.sha256(data).hexdigest()
-    if digest != artifact.get("sha256"):
-        raise SmokeFailure("downloaded artifact SHA-256 does not match server metadata")
-    if len(data) != artifact.get("size_bytes"):
-        raise SmokeFailure("downloaded artifact size does not match server metadata")
+    artifact_data = decode_retrieved_file(artifact, "sliced artifact")
 
     download_dir = Path(args.download_dir)
     download_dir.mkdir(parents=True, exist_ok=True)
-    destination = download_dir / Path(artifact_path).name
-    destination.write_bytes(data)
+    generated_destination = download_dir / Path(model_path).name
+    artifact_destination = download_dir / Path(artifact_path).name
+    generated_destination.write_bytes(generated_data)
+    artifact_destination.write_bytes(artifact_data)
 
     timings["overall"] = round(time.monotonic() - overall_started, 3)
     report = {
@@ -238,10 +256,13 @@ async def run(args: argparse.Namespace) -> int:
         "process_profile": validation.get("process_profile"),
         "filament_profile": validation.get("filament_profile"),
         "categories": validation.get("categories", []),
+        "generated_model_downloaded_to": str(generated_destination),
+        "generated_model_size_bytes": len(generated_data),
+        "generated_model_sha256": hashlib.sha256(generated_data).hexdigest(),
         "artifact": artifact_path,
-        "downloaded_to": str(destination),
-        "size_bytes": len(data),
-        "sha256": digest,
+        "artifact_downloaded_to": str(artifact_destination),
+        "artifact_size_bytes": len(artifact_data),
+        "artifact_sha256": hashlib.sha256(artifact_data).hexdigest(),
         "timings_seconds": timings,
     }
     print(json.dumps(report, indent=2))
