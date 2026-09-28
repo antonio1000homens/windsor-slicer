@@ -19,6 +19,24 @@ Version 1 supports `openscad` (`.scad` to `.stl`) and `copy` (committed `.stl` o
 
 Requests provide an exact `owner/repository`, a full 40-character commit SHA, and a model key. Configure `SLICER_ALLOWED_REPOSITORIES` as a comma-separated allowlist in the Codespace environment. Consumer files are fetched into `runtime/repos`, checked out as detached worktrees in `runtime/workspaces`, and generated or copied into `runtime/inputs`. Only staged files are accepted by Bambu Studio.
 
+## Generated-model and sliced-artifact retrieval
+
+The MCP keeps generated source models and printer-specific outputs in separate storage roots rather than copying files between them:
+
+```text
+slicer_prepare_workspace
+  -> slicer_generate_model
+  -> slicer_get_model          # canonical generated/staged STL or 3MF
+  -> slicer_slice / slicer_validate_for_print / slicer_prepare_print
+  -> slicer_get_artifact       # sliced printer/profile-specific 3MF
+```
+
+`slicer_get_model` accepts only `.stl` or `.3mf` files resolved below `runtime/inputs/`. `slicer_get_artifact` remains restricted to `.3mf` files below `artifacts/slicer/`. Both calls return the repository-relative path, filename, size and SHA-256 digest. Set `include_base64=true` only when the caller needs the bytes; inline transfers are bounded by `SLICER_MCP_MAX_ARTIFACT_BYTES` (10 MiB by default).
+
+The current MCP server uses structured tool results and does not expose a host-backed native downloadable-file reference. Bounded base64 is therefore the portable transfer mechanism today. Retrieval, hashing and size-limit logic is shared internally so a future native file-reference field can be added without changing either storage trust boundary.
+
+Consumer repositories may choose to version canonical generated STLs. Sliced 3MF files encode machine/nozzle/process/filament/bed choices and are normally treated as transient build/print artifacts rather than committed source.
+
 ## Local development
 
 ```sh

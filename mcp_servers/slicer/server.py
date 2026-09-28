@@ -63,10 +63,11 @@ def _build_mcp() -> MCPServer:
 
     return MCPServer(
         "Slicer Service",
-        version="0.2.0",
+        version="0.3.0",
         instructions=(
             "Prepare immutable allowlisted repository workspaces, generate or stage "
-            "manifest-defined models, and slice them with Bambu Studio. Never start a printer job."
+            "manifest-defined models, retrieve generated or sliced files, and slice them "
+            "with Bambu Studio. Never start a printer job."
         ),
         **kwargs,
     )
@@ -260,6 +261,21 @@ def slicer_prepare_print(
         filament_profile=filament_profile,
         orient=orient,
         bed_type=bed_type,
+    )
+
+
+@mcp.tool()
+def slicer_get_model(
+    path: str,
+    include_base64: bool = False,
+) -> dict[str, Any]:
+    """Return generated-model metadata and optionally bounded base64 file data."""
+    return _safe_call(
+        "slicer_get_model",
+        {"path": path, "include_base64": include_base64},
+        service.get_model,
+        path,
+        include_base64=include_base64,
     )
 
 
