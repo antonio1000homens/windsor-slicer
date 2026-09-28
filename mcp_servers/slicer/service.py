@@ -140,21 +140,35 @@ def _file_transfer_payload(
     size = path.stat().st_size
     if size == 0:
         raise SlicerServiceError(f"{kind} does not exist or is empty")
-    if include_base64 and size > _inline_transfer_limit():
-        raise SlicerServiceError(
-            f"{kind} is too large for inline MCP transfer"
-        )
+
+    if include_base64:
+        limit = _inline_transfer_limit()
+        if size > limit:
+            raise SlicerServiceError(
+                f"{kind} is too large for inline MCP transfer"
+            )
+        # Bound the allocation even if the file changes after stat().
+        with path.open("rb") as handle:
+            data = handle.read(limit + 1)
+        if len(data) > limit:
+            raise SlicerServiceError(
+                f"{kind} is too large for inline MCP transfer"
+            )
+        size = len(data)
+        digest = hashlib.sha256(data).hexdigest()
+    else:
+        data = None
+        digest = _sha256_file(path)
 
     result: dict[str, Any] = {
         "ok": True,
         "path": _repo_relative(path),
         "filename": path.name,
         "size_bytes": size,
-        "sha256": _sha256_file(path),
+        "sha256": digest,
     }
-    if include_base64:
-        # The size check above bounds this one-shot read before allocating bytes.
-        result["base64"] = base64.b64encode(path.read_bytes()).decode("ascii")
+    if data is not None:
+        result["base64"] = base64.b64encode(data).decode("ascii")
     return result
 
 
