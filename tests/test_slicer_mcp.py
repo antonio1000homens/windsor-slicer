@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -483,6 +484,108 @@ class SlicerServiceTests(unittest.TestCase):
             ):
                 self.provider.slice(str(TEST_MODEL.relative_to(ROOT)))
 
+    def test_generated_model_metadata_and_bounded_inline_transfer(self):
+        data = TEST_MODEL.read_bytes()
+        payload = self.service.get_model(
+            str(TEST_MODEL.relative_to(ROOT)),
+            include_base64=True,
+        )
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["path"], str(TEST_MODEL.relative_to(ROOT)))
+        self.assertEqual(payload["filename"], TEST_MODEL.name)
+        self.assertEqual(payload["size_bytes"], len(data))
+        self.assertEqual(payload["sha256"], hashlib.sha256(data).hexdigest())
+        self.assertTrue(payload["base64"])
+
+    def test_generated_3mf_model_can_be_retrieved(self):
+        model = TEST_MODEL.with_suffix(".3mf")
+        data = b"generated-3mf"
+        model.write_bytes(data)
+        try:
+            payload = self.service.get_model(
+                str(model.relative_to(ROOT)),
+                include_base64=True,
+            )
+        finally:
+            model.unlink(missing_ok=True)
+
+        self.assertEqual(payload["filename"], model.name)
+        self.assertEqual(payload["size_bytes"], len(data))
+        self.assertEqual(payload["sha256"], hashlib.sha256(data).hexdigest())
+
+    def test_generated_model_inline_transfer_is_size_bounded(self):
+        with patch.dict(
+            os.environ,
+            {"SLICER_MCP_MAX_ARTIFACT_BYTES": "4"},
+            clear=False,
+        ):
+            metadata = self.service.get_model(
+                str(TEST_MODEL.relative_to(ROOT)),
+                include_base64=False,
+            )
+            with self.assertRaisesRegex(
+                SlicerServiceError,
+                "model is too large for inline MCP transfer",
+            ):
+                self.service.get_model(
+                    str(TEST_MODEL.relative_to(ROOT)),
+                    include_base64=True,
+                )
+
+        self.assertGreater(metadata["size_bytes"], 4)
+        self.assertNotIn("base64", metadata)
+
+    def test_generated_model_rejects_paths_and_suffixes_outside_contract(self):
+        with self.assertRaisesRegex(
+            SlicerServiceError,
+            "must be under runtime/inputs",
+        ):
+            self.service.get_model("/etc/passwd")
+
+        invalid = TEST_MODEL.parent / "not-a-model.txt"
+        invalid.write_text("not a model", encoding="utf-8")
+        try:
+            with self.assertRaisesRegex(
+                SlicerServiceError,
+                "must end in .stl or .3mf",
+            ):
+                self.service.get_model(str(invalid.relative_to(ROOT)))
+        finally:
+            invalid.unlink(missing_ok=True)
+
+    @unittest.skipIf(os.name == "nt", "symlink contract is POSIX-specific")
+    def test_file_retrieval_rejects_symlink_escape_from_both_roots(self):
+        outside_model = ROOT / "outside-model.stl"
+        outside_artifact = ROOT / "outside-artifact.3mf"
+        outside_model.write_bytes(b"outside-model")
+        outside_artifact.write_bytes(b"outside-artifact")
+
+        model_link = TEST_MODEL.parent / "escaped.stl"
+        artifact_dir = service_module.OUTPUT_ROOT / "mcp-symlink-contract-test"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        artifact_link = artifact_dir / "escaped.3mf"
+        model_link.symlink_to(outside_model)
+        artifact_link.symlink_to(outside_artifact)
+
+        try:
+            with self.assertRaisesRegex(
+                SlicerServiceError,
+                "must be under runtime/inputs",
+            ):
+                self.service.get_model(str(model_link.relative_to(ROOT)))
+            with self.assertRaisesRegex(
+                SlicerServiceError,
+                "must remain under artifacts/slicer",
+            ):
+                self.service.get_artifact(str(artifact_link.relative_to(ROOT)))
+        finally:
+            model_link.unlink(missing_ok=True)
+            artifact_link.unlink(missing_ok=True)
+            outside_model.unlink(missing_ok=True)
+            outside_artifact.unlink(missing_ok=True)
+            shutil.rmtree(artifact_dir, ignore_errors=True)
+
     def test_artifact_metadata_and_bounded_inline_transfer(self):
         output_dir = service_module.OUTPUT_ROOT / "mcp-artifact-contract-test"
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -497,9 +600,33 @@ class SlicerServiceTests(unittest.TestCase):
             shutil.rmtree(output_dir, ignore_errors=True)
 
         self.assertTrue(payload["ok"])
+        self.assertEqual(payload["filename"], "part.sliced.3mf")
         self.assertEqual(payload["size_bytes"], 11)
         self.assertEqual(payload["base64"], "cHJpbnQtcmVhZHk=")
-        self.assertEqual(len(payload["sha256"]), 64)
+        self.assertEqual(
+            payload["sha256"],
+            hashlib.sha256(b"print-ready").hexdigest(),
+        )
+
+    def test_artifact_retrieval_remains_restricted_to_sliced_3mf_outputs(self):
+        with self.assertRaisesRegex(
+            SlicerServiceError,
+            "must remain under artifacts/slicer",
+        ):
+            self.service.get_artifact(str(TEST_MODEL.relative_to(ROOT)))
+
+        output_dir = service_module.OUTPUT_ROOT / "mcp-artifact-suffix-test"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        invalid = output_dir / "part.stl"
+        invalid.write_bytes(b"not-a-sliced-artifact")
+        try:
+            with self.assertRaisesRegex(
+                SlicerServiceError,
+                "artifact must be a .3mf file",
+            ):
+                self.service.get_artifact(str(invalid.relative_to(ROOT)))
+        finally:
+            shutil.rmtree(output_dir, ignore_errors=True)
 
     def test_workspace_slice_is_bound_to_generated_model(self):
         manager = Mock()
@@ -599,6 +726,7 @@ class SlicerMcpContractTests(unittest.IsolatedAsyncioTestCase):
                 "slicer_slice",
                 "slicer_validate_for_print",
                 "slicer_prepare_print",
+                "slicer_get_model",
                 "slicer_get_artifact",
                 "slicer_get_diagnostics",
             },
