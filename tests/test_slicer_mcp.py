@@ -524,14 +524,25 @@ class SlicerServiceTests(unittest.TestCase):
                 str(TEST_MODEL.relative_to(ROOT)),
                 include_base64=False,
             )
-            with self.assertRaisesRegex(
-                SlicerServiceError,
-                "model is too large for inline MCP transfer",
+            with (
+                patch(
+                    "mcp_servers.slicer.service._sha256_file",
+                    side_effect=AssertionError("oversized inline request must not hash"),
+                ),
+                patch.object(
+                    Path,
+                    "read_bytes",
+                    side_effect=AssertionError("oversized inline request must not read"),
+                ),
             ):
-                self.service.get_model(
-                    str(TEST_MODEL.relative_to(ROOT)),
-                    include_base64=True,
-                )
+                with self.assertRaisesRegex(
+                    SlicerServiceError,
+                    "model is too large for inline MCP transfer",
+                ):
+                    self.service.get_model(
+                        str(TEST_MODEL.relative_to(ROOT)),
+                        include_base64=True,
+                    )
 
         self.assertGreater(metadata["size_bytes"], 4)
         self.assertNotIn("base64", metadata)
