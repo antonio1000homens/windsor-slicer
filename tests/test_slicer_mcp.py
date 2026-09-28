@@ -531,8 +531,8 @@ class SlicerServiceTests(unittest.TestCase):
                 ),
                 patch.object(
                     Path,
-                    "read_bytes",
-                    side_effect=AssertionError("oversized inline request must not read"),
+                    "open",
+                    side_effect=AssertionError("oversized inline request must not open"),
                 ),
             ):
                 with self.assertRaisesRegex(
