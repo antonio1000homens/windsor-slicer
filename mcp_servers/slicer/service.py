@@ -112,6 +112,15 @@ def _inline_transfer_limit() -> int:
     return value
 
 
+def _sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
+    """Hash a file incrementally so metadata reads do not scale memory with size."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _file_transfer_payload(
     path: Path,
     *,
@@ -125,24 +134,27 @@ def _file_transfer_payload(
         if kind == "artifact":
             raise SlicerServiceError("artifact must be a .3mf file")
         raise SlicerServiceError("model path must end in .stl or .3mf")
-    if not path.is_file() or path.stat().st_size == 0:
+    if not path.is_file():
         raise SlicerServiceError(f"{kind} does not exist or is empty")
 
-    data = path.read_bytes()
-    size = len(data)
+    size = path.stat().st_size
+    if size == 0:
+        raise SlicerServiceError(f"{kind} does not exist or is empty")
+    if include_base64 and size > _inline_transfer_limit():
+        raise SlicerServiceError(
+            f"{kind} is too large for inline MCP transfer"
+        )
+
     result: dict[str, Any] = {
         "ok": True,
         "path": _repo_relative(path),
         "filename": path.name,
         "size_bytes": size,
-        "sha256": hashlib.sha256(data).hexdigest(),
+        "sha256": _sha256_file(path),
     }
     if include_base64:
-        if size > _inline_transfer_limit():
-            raise SlicerServiceError(
-                f"{kind} is too large for inline MCP transfer"
-            )
-        result["base64"] = base64.b64encode(data).decode("ascii")
+        # The size check above bounds this one-shot read before allocating bytes.
+        result["base64"] = base64.b64encode(path.read_bytes()).decode("ascii")
     return result
 
 
