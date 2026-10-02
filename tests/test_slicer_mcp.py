@@ -8,6 +8,7 @@ import signal
 import subprocess
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -18,6 +19,7 @@ from mcp_servers.slicer.service import (
     BambuStudioProvider,
     SlicerService,
     SlicerServiceError,
+    _support_toolpath_evidence,
 )
 from mcp_servers.slicer.workspace import Workspace
 
@@ -49,7 +51,14 @@ class SlicerServiceTests(unittest.TestCase):
         requested = (ROOT / command[-2]).resolve()
         output_dir = Path(command[-1])
         artifact = output_dir / f"{requested.stem}.sliced.3mf"
-        artifact.write_bytes(b"test-3mf")
+        if kwargs.get("env", {}).get("SLICER_SUPPORT_MODE") in {"normal-auto", "tree-auto"}:
+            with zipfile.ZipFile(artifact, "w") as archive:
+                archive.writestr(
+                    "Metadata/plate_1.gcode",
+                    "; FEATURE: Support\nG1 X1 Y1 E0.5\n; FEATURE: Outer wall\n",
+                )
+        else:
+            artifact.write_bytes(b"test-3mf")
         (output_dir / "slicer.log").write_text("clean slice\n", encoding="utf-8")
         (output_dir / "result.json").write_text(
             json.dumps(
@@ -76,6 +85,8 @@ class SlicerServiceTests(unittest.TestCase):
             payload["cloudflare_remote_endpoint"]["recommended_path_if_deployed"],
             "/mcp/slicer",
         )
+        self.assertEqual(payload["support_modes"], ["off", "normal-auto", "tree-auto"])
+        self.assertTrue(payload["manifest_variants_supported"])
 
     def test_capabilities_report_environment_profiles_and_builtin_fallbacks(self):
         configured = {
@@ -278,6 +289,83 @@ class SlicerServiceTests(unittest.TestCase):
             env["SLICER_MACHINE_PROFILE"],
             "Bambu Lab H2D 0.4 nozzle",
         )
+
+    def test_explicit_support_mode_is_forwarded_and_reported(self):
+        with patch(
+            "mcp_servers.slicer.service._run_process_group",
+            side_effect=self._successful_process,
+        ) as mocked:
+            payload = self.provider.slice(
+                str(TEST_MODEL.relative_to(ROOT)), support_mode="tree-auto"
+            )
+
+        self.assertEqual(mocked.call_args.kwargs["env"]["SLICER_SUPPORT_MODE"], "tree-auto")
+        self.assertEqual(payload["support"]["mode"], "tree-auto")
+        self.assertTrue(payload["support"]["enabled"])
+        self.assertTrue(payload["support"]["toolpaths_verified"])
+        self.assertGreater(payload["support"]["toolpath_evidence"]["support_extrusion_moves"], 0)
+
+    def test_support_toolpath_check_rejects_enabled_metadata_without_moves(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact = Path(temporary) / "empty-support.3mf"
+            with zipfile.ZipFile(artifact, "w") as archive:
+                archive.writestr("Metadata/plate_1.gcode", "; enable_support = 1\nG1 X1 Y1 E1\n")
+            self.assertFalse(_support_toolpath_evidence(artifact)["verified"])
+
+    def test_unknown_support_mode_is_rejected(self):
+        with self.assertRaisesRegex(SlicerServiceError, "support_mode must be"):
+            self.provider.slice(str(TEST_MODEL.relative_to(ROOT)), support_mode="organic")
+
+    def test_ambient_support_mode_does_not_change_an_omitted_request(self):
+        with (
+            patch.dict(os.environ, {"SLICER_SUPPORT_MODE": "tree-auto"}, clear=False),
+            patch(
+                "mcp_servers.slicer.service._run_process_group",
+                side_effect=self._successful_process,
+            ) as mocked,
+        ):
+            self.provider.slice(str(TEST_MODEL.relative_to(ROOT)))
+
+        self.assertNotIn("SLICER_SUPPORT_MODE", mocked.call_args.kwargs["env"])
+
+    def test_named_variant_precedence_flows_into_print_result(self):
+        manager = Mock()
+        manager.require_generated_model.return_value = Workspace(
+            workspace_id="a" * 20,
+            repository="example/model-fixture",
+            commit="b" * 40,
+            path=ROOT,
+        )
+        manager.resolve_variant.return_value = {
+            "variant": "petg-supported",
+            "machine_profile": "variant machine",
+            "process_profile": "variant process",
+            "filament_profile": "variant PETG",
+            "bed_type": "Textured PEI Plate",
+            "orient": True,
+            "support_mode": "tree-auto",
+        }
+        service = SlicerService(self.provider, manager)
+        with patch(
+            "mcp_servers.slicer.service._run_process_group",
+            side_effect=self._successful_process,
+        ):
+            result = service.validate_for_print(
+                workspace="a" * 20,
+                path_value=str(TEST_MODEL.relative_to(ROOT)),
+                variant="petg-supported",
+                filament_profile="explicit PETG",
+                orient=None,
+            )
+
+        self.assertEqual(result["variant"], "petg-supported")
+        self.assertEqual(result["machine_profile"], "variant machine")
+        self.assertEqual(result["process_profile"], "variant process")
+        self.assertEqual(result["filament_profile"], "explicit PETG")
+        self.assertEqual(result["bed_type"], "Textured PEI Plate")
+        self.assertTrue(result["orient"])
+        self.assertEqual(result["support"]["mode"], "tree-auto")
+        manager.resolve_variant.assert_called_once()
 
     def test_detected_slicer_binary_is_forwarded_to_shared_script(self):
         custom = Path("/tmp/custom-bambu-studio")
@@ -755,6 +843,16 @@ class SlicerMcpContractTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("machine_profile", schema.get("required", []))
                 self.assertNotIn("process_profile", schema.get("required", []))
                 self.assertNotIn("filament_profile", schema.get("required", []))
+                self.assertIn("support_mode", schema.get("properties", {}))
+                self.assertIn("variant", schema.get("properties", {}))
+                self.assertNotIn("support_mode", schema.get("required", []))
+                self.assertNotIn("variant", schema.get("required", []))
+                support_schema = schema["properties"]["support_mode"]
+                enum_schemas = support_schema.get("anyOf", [support_schema])
+                enum_values = next(
+                    item.get("enum") for item in enum_schemas if "enum" in item
+                )
+                self.assertEqual(enum_values, ["off", "normal-auto", "tree-auto"])
 
     async def test_profile_discovery_query_is_optional(self):
         tools = {tool.name: tool for tool in await server.mcp.list_tools()}

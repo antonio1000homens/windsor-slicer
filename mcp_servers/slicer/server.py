@@ -5,7 +5,7 @@ from __future__ import annotations
 import hmac
 import os
 import time
-from typing import Any
+from typing import Any, Literal
 
 import uvicorn
 from mcp.server.auth.provider import AccessToken, TokenVerifier
@@ -169,10 +169,12 @@ def slicer_slice(
     machine_profile: str | None = None,
     process_profile: str | None = None,
     filament_profile: str | None = None,
-    orient: bool = False,
+    orient: bool | None = None,
     bed_type: str | None = None,
+    support_mode: Literal["off", "normal-auto", "tree-auto"] | None = None,
+    variant: str | None = None,
 ) -> dict[str, Any]:
-    """Slice one model with the shared BambuStudio pipeline."""
+    """Slice with optional support_mode (off, normal-auto, tree-auto) and manifest variant."""
     arguments = {
         "path": path,
         "workspace": workspace,
@@ -181,6 +183,8 @@ def slicer_slice(
         "filament_profile": filament_profile,
         "orient": orient,
         "bed_type": bed_type,
+        "support_mode": support_mode,
+        "variant": variant,
     }
     return _safe_call(
         "slicer_slice",
@@ -193,6 +197,8 @@ def slicer_slice(
         filament_profile=filament_profile,
         orient=orient,
         bed_type=bed_type,
+        support_mode=support_mode,
+        variant=variant,
     )
 
 
@@ -203,10 +209,12 @@ def slicer_validate_for_print(
     machine_profile: str | None = None,
     process_profile: str | None = None,
     filament_profile: str | None = None,
-    orient: bool = False,
+    orient: bool | None = None,
     bed_type: str | None = None,
+    support_mode: Literal["off", "normal-auto", "tree-auto"] | None = None,
+    variant: str | None = None,
 ) -> dict[str, Any]:
-    """Run a real slice and return a printability result without printing."""
+    """Run validation; support_mode is off, normal-auto, or tree-auto, optionally via a named variant."""
     arguments = {
         "path": path,
         "workspace": workspace,
@@ -215,6 +223,8 @@ def slicer_validate_for_print(
         "filament_profile": filament_profile,
         "orient": orient,
         "bed_type": bed_type,
+        "support_mode": support_mode,
+        "variant": variant,
     }
     return _safe_call(
         "slicer_validate_for_print",
@@ -227,6 +237,8 @@ def slicer_validate_for_print(
         filament_profile=filament_profile,
         orient=orient,
         bed_type=bed_type,
+        support_mode=support_mode,
+        variant=variant,
     )
 
 
@@ -237,10 +249,12 @@ def slicer_prepare_print(
     machine_profile: str | None = None,
     process_profile: str | None = None,
     filament_profile: str | None = None,
-    orient: bool = False,
+    orient: bool | None = None,
     bed_type: str | None = None,
+    support_mode: Literal["off", "normal-auto", "tree-auto"] | None = None,
+    variant: str | None = None,
 ) -> dict[str, Any]:
-    """Generate a validated pre-sliced artifact; never start the printer."""
+    """Prepare a validated artifact; support_mode is off, normal-auto, or tree-auto, optionally via a named variant."""
     arguments = {
         "path": path,
         "workspace": workspace,
@@ -249,6 +263,8 @@ def slicer_prepare_print(
         "filament_profile": filament_profile,
         "orient": orient,
         "bed_type": bed_type,
+        "support_mode": support_mode,
+        "variant": variant,
     }
     return _safe_call(
         "slicer_prepare_print",
@@ -261,6 +277,8 @@ def slicer_prepare_print(
         filament_profile=filament_profile,
         orient=orient,
         bed_type=bed_type,
+        support_mode=support_mode,
+        variant=variant,
     )
 
 

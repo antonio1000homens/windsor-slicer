@@ -73,6 +73,17 @@ PROFILE_DIR="$OUT_DIR/profiles"
 rm -rf "$PROFILE_DIR"
 python3 "$ROOT_DIR/scripts/slicer/flatten-bambu-profile.py"   --profile-root "$PROFILE_ROOT"   --machine "${SLICER_MACHINE_PROFILE:-Bambu Lab H2D 0.4 nozzle}"   --process "${SLICER_PROCESS_PROFILE:-0.20mm Standard @BBL H2D}"   --filament "${SLICER_FILAMENT_PROFILE:-Bambu PLA Basic @BBL H2D}"   --output-dir "$PROFILE_DIR"
 
+SUPPORT_MODE="${SLICER_SUPPORT_MODE:-}"
+SUPPORT_ARGS=()
+if [[ -n "$SUPPORT_MODE" ]]; then
+  SUPPORT_ARGS=(--support-mode "$SUPPORT_MODE")
+fi
+SUPPORT_JSON="$(python3 "$ROOT_DIR/scripts/slicer/apply-process-overrides.py" \
+  --process "$PROFILE_DIR/process.json" "${SUPPORT_ARGS[@]}")"
+if [[ -n "$SUPPORT_MODE" ]]; then
+  echo "Support policy: $SUPPORT_JSON"
+fi
+
 MACHINE="$PROFILE_DIR/machine.json"
 PROCESS="$PROFILE_DIR/process.json"
 FILAMENT="$PROFILE_DIR/filament.json"
@@ -125,7 +136,7 @@ python3 "$ROOT_DIR/scripts/slicer/classify-slicer-log.py"   --log "$LOG"   --out
 validation_rc=$?
 set -e
 
-python3 - "$RESULT" "$INPUT" "$elapsed_ms" <<'PY'
+python3 - "$RESULT" "$INPUT" "$elapsed_ms" "$SUPPORT_JSON" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -133,9 +144,11 @@ from pathlib import Path
 path = Path(sys.argv[1])
 data = json.loads(path.read_text())
 elapsed_ms = int(sys.argv[3])
+support = json.loads(sys.argv[4])
 data["input"] = sys.argv[2]
 data["slice_milliseconds"] = elapsed_ms
 data["slice_seconds"] = round(elapsed_ms / 1000, 3)
+data["support"] = support
 path.write_text(json.dumps(data, indent=2) + "\n")
 PY
 

@@ -15,7 +15,29 @@ models:
     output: part.stl
 ```
 
-Version 1 supports `openscad` (`.scad` to `.stl`) and `copy` (committed `.stl` or `.3mf` to the same output type). Entries have only `source`, `generator`, and `output`; commands, scripts, custom arguments, environment fields, absolute paths, and traversal are rejected.
+Manifest version 1 supports `openscad` (`.scad` to `.stl`) and `copy` (committed `.stl` or `.3mf` to the same output type). Version 1 entries have only `source`, `generator`, and `output`; commands, scripts, custom arguments, environment fields, absolute paths, and traversal are rejected. Version 2 keeps those fields and may add named, strictly validated slicing variants:
+
+```yaml
+version: 2
+models:
+  power-supply-tray:
+    source: hardware/enclosure/power_supply_tray.scad
+    generator: openscad
+    output: power_supply_tray.stl
+    variants:
+      standard:
+        support_mode: off
+      petg-supported:
+        filament_profile: "Bambu PETG Basic @BBL H2D 0.4 nozzle"
+        bed_type: "Textured PEI Plate"
+        support_mode: tree-auto
+```
+
+Variant keys are limited to machine/process/filament profile, bed type, orientation, and `support_mode`. Support modes are `off`, `normal-auto`, and `tree-auto`. Windsor maps the automatic modes to the pinned Bambu settings `normal(auto)` and `tree(auto)` and changes only the generated job's flattened `process.json`; `off` explicitly disables support while retaining the profile's support type as an inactive value. Arbitrary Bambu settings and CLI arguments are not accepted.
+
+For a manifest-defined model, pass `variant="petg-supported"` to `slicer_slice`, `slicer_validate_for_print`, or `slicer_prepare_print`. For example, call `slicer_validate_for_print(path="runtime/inputs/<workspace>/power_supply_tray.stl", workspace="<workspace>", support_mode="off")` for the baseline, then `slicer_prepare_print(path="runtime/inputs/<workspace>/power_supply_tray.stl", workspace="<workspace>", variant="petg-supported")` for the intended print profile. Per-field precedence is explicit MCP request value, named variant value, then existing runtime/default profile behavior. The result includes the selected variant and resolved profiles/support policy. A support-enabled result is ready only when the sliced 3MF includes generated support extrusion moves. Without a variant or support mode, existing behavior is retained.
+
+Support-free and intended-print validation answer different questions. For example, run a baseline with `support_mode="off"` to preserve any unsupported-region warning, then validate or prepare the declared `tree-auto` variant. Windsor does not silently enable support during default validation. `slicer_capabilities` reports the supported modes and manifest-variant capability.
 
 Requests provide an exact `owner/repository`, a full 40-character commit SHA, and a model key. Configure `SLICER_ALLOWED_REPOSITORIES` as a comma-separated allowlist in the Codespace environment. Consumer files are fetched into `runtime/repos`, checked out as detached worktrees in `runtime/workspaces`, and generated or copied into `runtime/inputs`. Only staged files are accepted by Bambu Studio.
 
@@ -42,7 +64,7 @@ Consumer repositories may choose to version canonical generated STLs. Sliced 3MF
 ```sh
 python3 -m venv .venv
 .venv/bin/pip install -r mcp_servers/slicer/requirements.txt
-SLICER_ALLOWED_REPOSITORIES=owner/repository .venv/bin/python -m unittest discover -s tests -p 'test_slicer_*.py' -v
+SLICER_ALLOWED_REPOSITORIES=owner/repository .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
 node --test tests/test_slicer_worker.js
 ```
 

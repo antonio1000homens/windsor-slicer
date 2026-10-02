@@ -17,6 +17,7 @@ import subprocess
 import sys
 import time
 import uuid
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,7 @@ DEFAULT_PROCESS = "0.20mm Standard @BBL H2D"
 DEFAULT_FILAMENT = "Bambu PLA Basic @BBL H2D"
 DEFAULT_TIMEOUT_SECONDS = 900
 DEFAULT_RETENTION_HOURS = 24
+SUPPORT_MODES = {"off", "normal-auto", "tree-auto"}
 
 
 def _resolve_profile(requested: str | None, env_name: str, fallback: str) -> str:
@@ -119,6 +121,56 @@ def _sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
         for chunk in iter(lambda: handle.read(chunk_size), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _support_toolpath_evidence(path: Path) -> dict[str, Any]:
+    """Verify that a Bambu 3MF has generated support extrusion moves."""
+    try:
+        with zipfile.ZipFile(path) as artifact:
+            entries = sorted(
+                name
+                for name in artifact.namelist()
+                if re.fullmatch(r"Metadata/plate_[0-9]+\.gcode", name)
+            )
+            for entry in entries:
+                info = artifact.getinfo(entry)
+                if info.file_size > 512 * 1024 * 1024:
+                    continue
+                active_support = False
+                extrusion_moves = 0
+                with artifact.open(entry) as gcode:
+                    for raw_line in gcode:
+                        line = raw_line.decode("utf-8", errors="replace").strip()
+                        if line.startswith("; FEATURE:"):
+                            active_support = "support" in line.partition(":")[2].casefold()
+                            continue
+                        if line.startswith(";TYPE:"):
+                            active_support = "support" in line[6:].casefold()
+                            continue
+                        if not active_support or not line.startswith(("G0 ", "G1 ", "G2 ", "G3 ")):
+                            continue
+                        for token in line.split():
+                            if token.startswith("E"):
+                                try:
+                                    has_extrusion = float(token[1:]) != 0
+                                except ValueError:
+                                    continue
+                                if has_extrusion:
+                                    extrusion_moves += 1
+                                break
+                if extrusion_moves:
+                    return {
+                        "verified": True,
+                        "gcode_entry": entry,
+                        "support_extrusion_moves": extrusion_moves,
+                    }
+    except (OSError, zipfile.BadZipFile, RuntimeError):
+        pass
+    return {
+        "verified": False,
+        "gcode_entry": None,
+        "support_extrusion_moves": 0,
+    }
 
 
 def _file_transfer_payload(
@@ -521,7 +573,13 @@ class BambuStudioProvider:
         filament_profile: str | None = None,
         orient: bool = False,
         bed_type: str | None = None,
+        support_mode: str | None = None,
+        variant: str | None = None,
     ) -> dict[str, Any]:
+        if support_mode is not None and (
+            not isinstance(support_mode, str) or support_mode not in SUPPORT_MODES
+        ):
+            raise SlicerServiceError("support_mode must be off, normal-auto, or tree-auto")
         machine_profile = _resolve_profile(
             machine_profile, "SLICER_MACHINE_PROFILE", DEFAULT_MACHINE
         )
@@ -553,8 +611,17 @@ class BambuStudioProvider:
         detected_profile_root = _find_profile_root()
         if detected_profile_root is not None:
             env["BAMBU_PROFILE_ROOT"] = str(detected_profile_root)
-        if bed_type:
-            env["SLICER_BED_TYPE"] = bed_type
+        effective_bed_type = (
+            bed_type.strip()
+            if isinstance(bed_type, str) and bed_type.strip()
+            else env.get("SLICER_BED_TYPE", "").strip() or None
+        )
+        if effective_bed_type:
+            env["SLICER_BED_TYPE"] = effective_bed_type
+        if support_mode is not None:
+            env["SLICER_SUPPORT_MODE"] = support_mode
+        else:
+            env.pop("SLICER_SUPPORT_MODE", None)
 
         command = [
             "bash",
@@ -640,11 +707,44 @@ class BambuStudioProvider:
                 "process_profile": process_profile,
                 "filament_profile": filament_profile,
                 "orient": bool(orient),
-                "bed_type": bed_type,
+                "bed_type": effective_bed_type,
+                "variant": variant,
                 "output_dir": _repo_relative(output_dir),
                 "log": _repo_relative(output_dir / "slicer.log"),
             }
         )
+        if support_mode is not None:
+            result.setdefault(
+                "support",
+                {
+                    "mode": support_mode,
+                    "enabled": support_mode != "off",
+                    "type": {
+                        "normal-auto": "normal(auto)",
+                        "tree-auto": "tree(auto)",
+                    }.get(support_mode),
+                    "threshold_angle": None,
+                    "build_plate_only": None,
+                },
+            )
+            if support_mode != "off":
+                evidence = (
+                    _support_toolpath_evidence(Path(ROOT / result["artifact"]))
+                    if result.get("artifact")
+                    else {"verified": False, "gcode_entry": None, "support_extrusion_moves": 0}
+                )
+                result["support"].update(
+                    {
+                        "toolpaths_verified": evidence["verified"],
+                        "toolpath_evidence": evidence,
+                    }
+                )
+                if not evidence["verified"]:
+                    result["ok"] = False
+                    for key in ("categories", "fatal_categories"):
+                        result.setdefault(key, [])
+                        if "SUPPORT_TOOLPATHS_MISSING" not in result[key]:
+                            result[key].append("SUPPORT_TOOLPATHS_MISSING")
 
         # Never return the captured raw process output through MCP. The shared
         # script writes a bounded artifact log that can be inspected separately.
@@ -680,6 +780,49 @@ class SlicerService:
             "workspace": resolved.workspace_id,
             "commit": resolved.commit,
         }
+
+    def _resolve_options(
+        self,
+        *,
+        workspace: str | None,
+        kwargs: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, str]]:
+        options = dict(kwargs)
+        path_value = str(options.get("path_value") or "")
+        variant = options.pop("variant", None)
+        context = self._workspace_context(workspace, path_value)
+        if variant is not None:
+            if not workspace:
+                raise SlicerServiceError("variant requires a prepared workspace")
+            try:
+                variant_values = self.workspace_manager.resolve_variant(
+                    workspace_id=workspace,
+                    path_value=path_value,
+                    variant=variant,
+                )
+            except WorkspaceError as error:
+                raise SlicerServiceError(str(error)) from error
+        else:
+            variant_values = {}
+
+        # A missing request field inherits the selected variant. Profile/runtime
+        # defaults are still resolved by the provider after this merge.
+        options["variant"] = variant_values.get("variant")
+        for key in (
+            "machine_profile",
+            "process_profile",
+            "filament_profile",
+            "bed_type",
+            "support_mode",
+        ):
+            requested = options.get(key)
+            if requested is None or (
+                isinstance(requested, str) and not requested.strip()
+            ):
+                options[key] = variant_values.get(key)
+        if options.get("orient") is None:
+            options["orient"] = variant_values.get("orient", False)
+        return options, context
 
     def prepare_workspace(self, repository: str, commit: str) -> dict[str, Any]:
         try:
@@ -763,6 +906,8 @@ class SlicerService:
     def capabilities(self) -> dict[str, Any]:
         return {
             "service": "windsor-slicer-mcp",
+            "support_modes": ["off", "normal-auto", "tree-auto"],
+            "manifest_variants_supported": True,
             "providers": [self.provider.capabilities()],
             "allowed_input_roots": [
                 _repo_relative(path) for path in ALLOWED_INPUT_ROOTS
@@ -803,10 +948,8 @@ class SlicerService:
         workspace: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        context = self._workspace_context(
-            workspace, str(kwargs.get("path_value") or "")
-        )
-        return {**self.provider.slice(**kwargs), **context}
+        options, context = self._resolve_options(workspace=workspace, kwargs=kwargs)
+        return {**self.provider.slice(**options), **context}
 
     def validate_for_print(
         self,
@@ -814,10 +957,8 @@ class SlicerService:
         workspace: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        context = self._workspace_context(
-            workspace, str(kwargs.get("path_value") or "")
-        )
-        result = self.provider.slice(**kwargs)
+        options, context = self._resolve_options(workspace=workspace, kwargs=kwargs)
+        result = self.provider.slice(**options)
         result.update(context)
         return {
             **result,
@@ -831,10 +972,8 @@ class SlicerService:
         workspace: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        context = self._workspace_context(
-            workspace, str(kwargs.get("path_value") or "")
-        )
-        result = self.provider.slice(**kwargs)
+        options, context = self._resolve_options(workspace=workspace, kwargs=kwargs)
+        result = self.provider.slice(**options)
         result.update(context)
         ready = bool(result.get("ok") and result.get("artifact"))
         return {

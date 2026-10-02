@@ -149,6 +149,77 @@ class WorkspaceContractTests(unittest.TestCase):
             with self.assertRaises(WorkspaceError):
                 self.manager._model_spec(self.workspace, "fixture")
 
+    def test_manifest_v2_without_variants_is_valid(self):
+        (self.repo / ".windsor-slicer.yaml").write_text(
+            "version: 2\nmodels:\n  fixture:\n    source: model.stl\n"
+            "    generator: copy\n    output: staged.stl\n",
+            encoding="utf-8",
+        )
+        spec = self.manager._model_spec(self.workspace, "fixture")
+        self.assertEqual(spec["variants"], {})
+
+    def test_manifest_v2_accepts_only_allowlisted_named_variant_values(self):
+        manifest = self.repo / ".windsor-slicer.yaml"
+        manifest.write_text(
+            "version: 2\nmodels:\n  fixture:\n    source: model.stl\n"
+            "    generator: copy\n    output: staged.stl\n"
+            "    variants:\n      petg-supported:\n"
+            "        filament_profile: Bambu PETG\n"
+            "        bed_type: Textured PEI Plate\n"
+            "        orient: false\n        support_mode: tree-auto\n",
+            encoding="utf-8",
+        )
+        spec = self.manager._model_spec(self.workspace, "fixture")
+        self.assertEqual(spec["variants"]["petg-supported"]["support_mode"], "tree-auto")
+
+        for unsafe in (
+            "        command: whoami\n",
+            "        env:\n          SECRET: value\n",
+            "        process_settings:\n          arbitrary: true\n",
+        ):
+            manifest.write_text(
+                "version: 2\nmodels:\n  fixture:\n    source: model.stl\n"
+                "    generator: copy\n    output: staged.stl\n"
+                "    variants:\n      unsafe:\n" + unsafe,
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(WorkspaceError, "unsupported keys"):
+                self.manager._model_spec(self.workspace, "fixture")
+
+    def test_manifest_v2_rejects_invalid_support_mode_and_unknown_variant(self):
+        manifest = self.repo / ".windsor-slicer.yaml"
+        prefix = (
+            "version: 2\nmodels:\n  fixture:\n    source: model.stl\n"
+            "    generator: copy\n    output: staged.stl\n"
+        )
+        manifest.write_text(
+            prefix + "    variants:\n      custom:\n        support_mode: organic\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(WorkspaceError, "support_mode is invalid"):
+            self.manager._model_spec(self.workspace, "fixture")
+
+        manifest.write_text(
+            prefix + "    variants:\n      supported:\n        support_mode: tree-auto\n",
+            encoding="utf-8",
+        )
+        staged = self.manager.input_root / self.workspace_id / "staged.stl"
+        staged.parent.mkdir(parents=True)
+        staged.write_bytes(b"stl")
+        with patch.object(self.manager, "resolve", return_value=self.workspace):
+            values = self.manager.resolve_variant(
+                workspace_id=self.workspace_id,
+                path_value=str(staged),
+                variant="supported",
+            )
+            self.assertEqual(values, {"variant": "supported", "support_mode": "tree-auto"})
+            with self.assertRaisesRegex(WorkspaceError, "does not exist"):
+                self.manager.resolve_variant(
+                    workspace_id=self.workspace_id,
+                    path_value=str(staged),
+                    variant="missing",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

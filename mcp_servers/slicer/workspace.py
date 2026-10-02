@@ -26,6 +26,15 @@ WORKSPACE_ID_RE = re.compile(r"^[0-9a-f]{20}$")
 MODEL_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 OUTPUT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 MANIFEST_NAME = ".windsor-slicer.yaml"
+VARIANT_KEYS = {
+    "machine_profile",
+    "process_profile",
+    "filament_profile",
+    "bed_type",
+    "orient",
+    "support_mode",
+}
+SUPPORT_MODES = {"off", "normal-auto", "tree-auto"}
 
 
 class WorkspaceError(RuntimeError):
@@ -280,9 +289,7 @@ class WorkspaceManager:
             raise WorkspaceError("workspace differs from its immutable commit")
         return Workspace(normalized, repository, commit, path)
 
-    def _model_spec(self, workspace: Workspace, model: str) -> dict[str, str]:
-        if not MODEL_KEY_RE.fullmatch(model):
-            raise WorkspaceError("model key is invalid")
+    def _load_manifest(self, workspace: Workspace) -> tuple[int, dict[str, Any]]:
         manifest_path = (workspace.path / MANIFEST_NAME).resolve()
         try:
             manifest_path.relative_to(workspace.path)
@@ -292,14 +299,68 @@ class WorkspaceManager:
             manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
         except (OSError, yaml.YAMLError) as error:
             raise WorkspaceError("consumer manifest is missing or invalid YAML") from error
-        if not isinstance(manifest, dict) or manifest.get("version") != 1 or set(manifest) != {"version", "models"}:
-            raise WorkspaceError("manifest must contain only version 1 and models")
+        if not isinstance(manifest, dict) or set(manifest) != {"version", "models"}:
+            raise WorkspaceError("manifest must contain only version and models")
+        version = manifest.get("version")
+        if type(version) is not int or version not in {1, 2}:
+            raise WorkspaceError("manifest version must be 1 or 2")
         models = manifest.get("models")
+        if not isinstance(models, dict):
+            raise WorkspaceError("manifest models must be a mapping")
+        return version, models
+
+    @staticmethod
+    def _validate_variants(spec: dict[str, Any], version: int) -> dict[str, dict[str, Any]]:
+        variants = spec.get("variants")
+        if version == 1:
+            if "variants" in spec:
+                raise WorkspaceError("manifest version 1 does not support variants")
+            return {}
+        if variants is None:
+            return {}
+        if not isinstance(variants, dict):
+            raise WorkspaceError("model variants must be a mapping")
+        normalized: dict[str, dict[str, Any]] = {}
+        for name, values in variants.items():
+            if not isinstance(name, str) or not MODEL_KEY_RE.fullmatch(name):
+                raise WorkspaceError("variant name is invalid")
+            if not isinstance(values, dict):
+                raise WorkspaceError(f"variant {name!r} must be a mapping")
+            unknown = set(values) - VARIANT_KEYS
+            if unknown:
+                raise WorkspaceError(
+                    f"variant {name!r} contains unsupported keys: {', '.join(sorted(map(str, unknown)))}"
+                )
+            for key in ("machine_profile", "process_profile", "filament_profile", "bed_type"):
+                if key in values and (
+                    not isinstance(values[key], str)
+                    or not values[key].strip()
+                    or len(values[key]) > 256
+                    or any(ord(char) < 32 for char in values[key])
+                ):
+                    raise WorkspaceError(f"variant {name!r} {key} must be a non-empty string")
+            if "orient" in values and type(values["orient"]) is not bool:
+                raise WorkspaceError(f"variant {name!r} orient must be a boolean")
+            if "support_mode" in values and (
+                not isinstance(values["support_mode"], str)
+                or values["support_mode"] not in SUPPORT_MODES
+            ):
+                raise WorkspaceError(f"variant {name!r} support_mode is invalid")
+            normalized[name] = dict(values)
+        return normalized
+
+    def _model_spec(self, workspace: Workspace, model: str) -> dict[str, Any]:
+        if not MODEL_KEY_RE.fullmatch(model):
+            raise WorkspaceError("model key is invalid")
+        version, models = self._load_manifest(workspace)
         if not isinstance(models, dict) or model not in models:
             raise WorkspaceError("model key does not exist in manifest")
         spec = models[model]
-        if not isinstance(spec, dict) or set(spec) != {"source", "generator", "output"}:
-            raise WorkspaceError("model entry must contain only source, generator and output")
+        required_keys = {"source", "generator", "output"}
+        allowed_keys = required_keys | ({"variants"} if version == 2 else set())
+        if not isinstance(spec, dict) or not required_keys.issubset(spec) or set(spec) - allowed_keys:
+            raise WorkspaceError("model entry must contain only source, generator and output; version 2 may add supported variants")
+        variants = self._validate_variants(spec, version)
         if not all(isinstance(spec.get(key), str) and spec[key].strip() for key in ("source", "generator", "output")):
             raise WorkspaceError("model source, generator and output must be non-empty strings")
         if spec["generator"] not in {"openscad", "copy"}:
@@ -323,7 +384,44 @@ class WorkspaceManager:
             raise WorkspaceError("openscad requires a .scad source and .stl output")
         if spec["generator"] == "copy" and (source.suffix.lower() not in {".stl", ".3mf"} or source.suffix.lower() != Path(output).suffix.lower()):
             raise WorkspaceError("copy requires matching .stl or .3mf source and output")
-        return {"source": source_value, "generator": spec["generator"], "output": output, "absolute_source": str(source)}
+        return {"source": source_value, "generator": spec["generator"], "output": output, "absolute_source": str(source), "variants": variants}
+
+    def resolve_variant(
+        self,
+        *,
+        workspace_id: str,
+        path_value: str,
+        variant: str | None,
+    ) -> dict[str, Any]:
+        """Resolve the named variant for a generated manifest model."""
+        if variant is None:
+            return {}
+        if not isinstance(variant, str) or not MODEL_KEY_RE.fullmatch(variant):
+            raise WorkspaceError("variant name is invalid")
+        workspace = self.resolve(workspace_id)
+        requested = Path(path_value)
+        candidate = requested if requested.is_absolute() else self.root / requested
+        staged = candidate.resolve()
+        expected = (self.input_root / workspace.workspace_id).resolve()
+        try:
+            staged.relative_to(expected)
+        except ValueError as error:
+            raise WorkspaceError("variant requires a staged model from that workspace") from error
+        matches: list[tuple[str, dict[str, Any]]] = []
+        _, models = self._load_manifest(workspace)
+        for model_key in models:
+            spec = self._model_spec(workspace, str(model_key))
+            output_path = (expected / spec["output"]).resolve()
+            if staged == output_path:
+                matches.append((str(model_key), spec))
+        if len(matches) != 1:
+            raise WorkspaceError("staged model does not map to exactly one manifest model")
+        model_key, spec = matches[0]
+        try:
+            values = spec["variants"][variant]
+        except KeyError as error:
+            raise WorkspaceError(f"variant {variant!r} does not exist for model {model_key!r}") from error
+        return {"variant": variant, **values}
 
     def generate_model(self, *, workspace_id: str, model: str) -> dict[str, Any]:
         workspace = self.resolve(workspace_id)
