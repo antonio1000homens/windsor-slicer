@@ -1,0 +1,13 @@
+version: 2
+models:
+  tube-end-cap-snap:
+    source: projects/tube-end-cap/tube_end_cap_snap.scad
+    generator: openscad
+    output: tube_end_cap_snap.stl
+    variants:
+      h2d-petg-no-support:
+        machine_profile: "Bambu Lab H2D 0.4 nozzle"
+        process_profile: "0.20mm Standard @BBL H2D"
+        filament_profile: "Bambu PETG Basic @BBL H2D 0.4 nozzle"
+        bed_type: "Textured PEI Plate"
+        support_mode: "off"

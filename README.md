@@ -2,6 +2,10 @@
 
 Windsor Slicer is a reusable Streamable HTTP MCP service for preparing immutable models from allowlisted GitHub repositories and slicing them with Bambu Studio. It preserves the proven Bambu Studio `v02.08.02.61` runtime and H2D profiles. It never submits a printer job.
 
+## 3D-print projects
+
+Reusable personal designs are kept in [`projects/`](projects/README.md), independently of the slicer service implementation. The first project is a [physically fitted 35 mm tube snap-fit cap](projects/tube-end-cap/README.md). Add new designs under `projects/<name>/` and register their source in the root `.windsor-slicer.yaml` when needed.
+
 ## Consumer contract
 
 Each consumer repository declares its models in `.windsor-slicer.yaml`:
