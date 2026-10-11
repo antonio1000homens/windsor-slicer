@@ -5,3 +5,4 @@ runtime/
 artifacts/
 __pycache__/
 *.py[cod]
+projects/**/dist/
