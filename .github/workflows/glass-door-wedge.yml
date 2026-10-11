@@ -1,0 +1,26 @@
+name: Glass door wedge / OpenSCAD
+
+on:
+  pull_request:
+    paths:
+      - 'examples/glass-door-wedge/**'
+      - '.github/workflows/glass-door-wedge.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'examples/glass-door-wedge/**'
+      - '.github/workflows/glass-door-wedge.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  geometry:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install OpenSCAD
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends openscad
+      - name: Verify parametric model and committed STL
+        run: python3 examples/glass-door-wedge/verify.py
